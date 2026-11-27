@@ -84,6 +84,7 @@ from robothor.engine.chat_store import (
 # Re-exported on purpose: chat_restore calls it through this module, so tests
 # that patch ``chat.load_all_sessions`` reach the startup restore.
 from robothor.engine.chat_store import load_all_sessions as load_all_sessions
+from robothor.engine.conversation_memory import remember_exchange
 from robothor.engine.early_done import EarlyRelease, chat_done_event
 from robothor.engine.feature_flags import per_user_sessions_mode
 from robothor.engine.live_inbox import LiveInbox, history_text
@@ -462,9 +463,8 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                     model_override=session.model_override,
                     tenant_id=auth.tenant_id,
                     user_extras=with_sender(
-                        target.author(auth, name, attached.extras),
-                        user_id=getattr(auth, "user_id", None),
-                    ),
+                        target.author(auth, name, attached.extras), user_id=auth.user_id
+                    ),  # fmt: skip
                     user_at=received_at,
                 )
                 if target.room is None:
@@ -472,25 +472,12 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 else:
                     await chat_rooms.saved(target, saving)
 
-            # Ingest conversation to memory (fire-and-forget). Every exchange,
-            # however short: ingest extracts only the turns not yet extracted.
-            if _config:
-                from robothor.engine.task_registry import get_task_registry
-                from robothor.memory.conversation_ingest import (
-                    ingest_conversation_session,
-                )
-
-                get_task_registry().spawn(
-                    ingest_conversation_session(
-                        session_key=session_key,
-                        history=list(session.history),
-                        agent_id=agent_id,
-                        trigger_type="webchat",
-                        run_id=run.id,
-                        tenant_id=auth.tenant_id,
-                    ),
+            if _config:  # conversation memory (fire-and-forget), every exchange
+                remember_exchange(
+                    session_key=session_key, history=session.history, agent_id=agent_id,
+                    channel="webchat", run_id=run.id, tenant_id=auth.tenant_id,
                     name=f"conv-ingest:{session_key}",
-                )
+                )  # fmt: skip
 
             if not early.released:  # signal completion with metadata
                 await queue.put(chat_done_event(run, delivered))

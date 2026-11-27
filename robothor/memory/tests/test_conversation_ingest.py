@@ -443,9 +443,11 @@ async def test_a_failure_anywhere_is_logged_never_raised() -> None:
 def test_the_callers_do_not_gate_ingest_on_history_length(path: str) -> None:
     root = Path(__file__).resolve().parents[3]
     src = (root / path).read_text()
-    at = src.index("ingest_conversation_session(\n")
+    at = src.index("remember_exchange(")  # robothor/engine/conversation_memory.py
     guard = src[max(0, at - 700) : at]
     assert "len(session.history) >=" not in guard
+    helper = (root / "robothor/engine/conversation_memory.py").read_text()
+    assert "ingest_conversation_session(" in helper and "len(" not in helper
 
 
 # ═══ every fact is linked to its source turns ════════════════════════════
