@@ -206,3 +206,57 @@ async def test_a_rescoped_facts_edges_and_nodes_stop_being_public(world: World) 
         )[0][0]
         == 0
     )
+
+
+@pytest.mark.asyncio
+async def test_a_node_anything_else_still_names_is_kept_and_reported(world: World) -> None:
+    from robothor.memory import write_path
+    from robothor.memory.conversation_backfill import rescope_conversation_facts
+
+    store_chat(world.db, "telegram:4242", [("user", "hi")], person=ALICE)
+    world.model.on(
+        "OLD2",
+        wp.fact(
+            "Dana Reyes treats Reader Person with Quentin Marsh.",
+            [("Dana Reyes", "person"), ("Quentin Marsh", "person")],
+        ),
+    )
+    await wp._ingest(
+        "OLD2 text", "telegram", "conversation", role="user",
+        metadata={"session_key": "telegram:4242"},
+    )  # fmt: skip
+    # Another person's private fact resolves to the node the old fact minted.
+    ctx = write_path.WriteContext.for_source(
+        tenant_id=TENANT,
+        source_channel="telegram",
+        content_type="conversation",
+        role="user",
+        scope=("user", wp.BOB_P),
+    )
+    await write_path.write_facts(
+        [wp.fact("Dana Reyes is also this other reader's doctor.", [("Dana Reyes", "person")])],
+        source_content="x",
+        context=ctx,
+    )
+    # A legacy shared fact names the other node only in its entities column.
+    world.db.q(
+        "INSERT INTO memory_facts (fact_text, category, entities, tenant_id, scope_kind) "
+        "VALUES ('Quentin Marsh chairs the board.', 'project', ARRAY['Quentin Marsh'], %s, "
+        "'shared')",
+        (TENANT,),
+    )
+
+    dry = rescope_conversation_facts(TENANT)
+    assert dry["nodes_kept_by_entities"] == 1
+    assert dry["nodes_kept_by_other_facts"] == 1
+    assert dry["nodes_removed"] == 0
+
+    rescope_conversation_facts(TENANT, apply=True)
+    names = {r[0] for r in world.db.q("SELECT name FROM memory_entities")}
+    assert {"Dana Reyes", "Quentin Marsh"} <= names
+    bob = world.db.q(
+        "SELECT m.surface_form, m.entity_id FROM memory_mentions m JOIN memory_facts f "
+        "ON f.id = m.fact_id WHERE f.scope_id = %s",
+        (wp.BOB_P,),
+    )
+    assert bob and all(r[1] is not None for r in bob)  # the other person's mention stays
