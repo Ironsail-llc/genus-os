@@ -160,15 +160,28 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    ever removes rows the caller already holds; on a failure nothing is left out
    and the failure is logged.
 8. **Changed values** — a fact closed by a value change (see
-   [Changed values](#changed-values)) never outranks the fact that replaced
-   it. Default recall (`active_only=True`) still ranks active facts only; after
-   ranking, each current row that replaced a value is followed by that earlier
-   row (one per current row, `MAX_EARLIER_ROWS` = 3 per recall, read by primary
-   key through the same tenant, scope and reader filters). With
-   `active_only=False` a closed row is placed directly after its current row,
-   which is brought in when it was not ranked. Earlier rows carry
-   `superseded: true`, `superseded_at` (its `valid_to`), `superseded_reason`
-   and `superseded_by`.
+   [Changed values](#changed-values)) never outranks, and never appears
+   without, the fact that replaced it. Default recall (`active_only=True`)
+   still ranks active facts only; after ranking, each current row that
+   replaced a value is followed by that earlier row. With `active_only=False`
+   a closed row moves directly after its current row, which takes its place
+   when it was not ranked. The contract: at most `limit` ranked rows (plus the
+   graph's 2), then at most `bitemporal.MAX_EARLIER_ROWS` (3) extra rows,
+   earlier values and current rows brought in, which never displace a ranked
+   row. An earlier row is read by primary key through the same tenant, scope
+   and reader filters, never once the operator forgot it, and is dropped when
+   it near-duplicates another row (not its own current row, which a reversal
+   repeats word for word). It has the full row shape with its scores
+   explicitly null, its current row's `leg_ranks` and `budget_tail`, and
+   `earlier_of` (the current row's id), `superseded: true`, `superseded_at`,
+   `superseded_reason` and `superseded_by`. `recall.row_text` reads it as
+   `Earlier value, replaced 2026-05-01: Alice lives in Boston.`, so every
+   surface (the `search_memory` tool on both paths, MCP, deep reason)
+   labels it, and the tool and MCP rows carry the four fields. Packing
+   (`recall.within_context_cap`) and the RIP 15 router set earlier rows
+   aside, pack, re-sort and cut the ranked rows, then put each earlier row
+   back directly after its current row if that row survived and the
+   remaining budget holds it (`recall.split_earlier` / `attach_earlier`).
 
 Every leg shares `limit`. The `search_memory` tool fills the recall context
 cap, `RECALL_CONTEXT_CHARS` (4,000 characters, in `robothor/memory/recall.py`,
@@ -514,17 +527,21 @@ results = await search_facts("what caching solution was chosen?", limit=5)
 When a new fact arrives, the pipeline first asks which slot it fills, then
 falls back to similarity:
 
-1. **Same slot** -- see [Changed values](#changed-values). A change, or a
-   new value of a multi-valued attribute, is decided here with no model call.
+1. **Same slot** -- see [Changed values](#changed-values). A pair that shares
+   a slot is decided there.
 2. **find_similar_facts** -- pgvector cosine search, threshold 0.7, same tenant
    and scope.
 3. **Reinforce** -- a match at cosine 0.92 or more, same category, carrying
    the same values (`values_differ`: no different number, no different name,
    not the same words reordered) is the same fact said again: it is
    reinforced and nothing is stored.
-4. **classify_relationship** -- otherwise the LLM classifies the best match as
+4. **Different subjects** -- a match that names no entity in common with the
+   new fact ("She lives in Boston" said of one person, "She lives in Denver"
+   of another) is stored beside it, with no model call.
+5. **classify_relationship** -- otherwise the LLM classifies the best match as
    `new`, `duplicate`, `update`, or `contradiction`.
-5. **Act** -- store (new), skip (duplicate), or supersede (update/contradiction).
+6. **Act** -- store (new), skip (duplicate), or supersede (update/contradiction),
+   within the trust order below.
 
 Every decision, including the ones that change nothing, is a row in
 `memory_conflict_decisions`.
@@ -535,40 +552,92 @@ A slot is a subject and an attribute. It is read from the fact's canonical
 predicate (`PREDICATE_ATTRIBUTES`, over `write_path.normalize_predicate` of an
 extracted relation) or, failing that, from a small lexical frame over the text
 ("X lives in / moved to Y", "X works at Y", "X prefers Y over Z", "X's
-favorite C is Y", "X's manager is Y", "X has visited Y", "X likes Y", ...). A
-fact that matches none has no slot and keeps the similarity path. The subject
-is the same when the names match or both resolve to the same entity
-(`memory_mentions`), so "Ally" and "Alice" are one subject once resolved.
+favorite C is Y", "X's manager is Y", "X has visited Y", "X likes Y", ...).
 
-Candidates come from a bounded lookup, not a scan: the nearest neighbours
-already found plus at most 25 active facts naming the subject, through the
-`lower_entities(entities)` index and the subject's entities in
-`memory_mentions` (one statement), in the fact's own tenant and exactly its
-scope. A fact in another tenant, or private to someone else, is never
-compared.
+**No slot at all** (the similarity path decides, as before) for a sentence
+that is not a plain statement of one current value: one with `also`, a
+negation (`not`, `never`, `no longer`, `n't`), `but`, `if`, `unless`, a hedge
+(`might`, `could`, `would`, `maybe`, `temporarily`, `used to`), reported
+speech (`said`, `told`), quotes or a question mark; a pronoun or generic
+subject (`she`, `the user`, `the company`); or a value not of the attribute's
+type. Names (residence, employer, manager, spouse, car, ...) must be
+capitalised words ("the sales team", "night", "her job", "12 Main Street" as a
+residence are refused); phone, email, address, birthday, age and timezone must
+match their literal shape ("broken", "next week", "a sensitive topic" are
+refused).
+
+**Same subject.** When a stored fact's subject resolved to an entity
+(`memory_mentions`), only that entity matches: two people named Alice never
+share a slot, and an unresolved name never borrows a resolved fact's. The new
+fact's subject is resolved before the decision (mentions are written after
+it): the one entity of the tenant with that name, none when there are
+several. Otherwise a matching name does.
+
+**Candidates** come from a bounded lookup by subject AND attribute, never
+the subject's newest facts (a busy subject's other facts never hide the
+slot): the subject entity's edges with the slot's predicates
+(`memory_relations (tenant_id, source_entity_id)`), facts naming the subject
+whose text names the attribute (`lower_entities` and `tsv` GINs, with the
+tenant index in the bitmap), and the subject entity's mentions filtered the
+same way, at most 25, plus the nearest neighbours already found, all in the
+fact's own tenant and exactly its scope. A fact in another tenant, or private
+to someone else, is never compared.
+
+**Cardinality.** Single-valued (`SINGLE_VALUED_ATTRIBUTES`: residence,
+manager, role, title, spouse, partner, car, birthday, age, timezone, and every
+pairwise preference and favorite); several-valued
+(`SEVERAL_VALUED_ATTRIBUTES`: employer, phone, email, address, which people
+often have more than one of); multi-valued (`MULTI_VALUED_ATTRIBUTES`: likes,
+owns, visited, uses, speaks, plays).
 
 - **Repeat** (the same value, or one value's words containing the other's):
   at cosine 0.92 or more in the same category the existing fact is
-  reinforced; a restatement below that (other words, perhaps a more trusted
-  source) goes on to the similarity path as before, so its provenance is not
-  lost.
-- **Change** (a different value for a single-valued attribute:
-  `SINGLE_VALUED_ATTRIBUTES` -- residence, employer, manager, role, title,
-  spouse, partner, car, phone, email, address, birthday, age, timezone -- and
-  every pairwise preference and favorite): the new fact is stored and every
-  active value of the slot is closed with `superseded_by`, `valid_to` and
-  `metadata.superseded_reason = "changed"`; the new row lists them in
-  `metadata.supersedes`. Nothing is deleted.
-- **Coexist** (a different value for a multi-valued attribute: likes, owns,
-  has visited, uses, speaks, plays): the new fact is stored beside the old.
+  reinforced; a restatement below that goes on to the similarity path, so its
+  provenance is not lost.
+- **Multi-valued, a different value:** stored beside the old, no model call,
+  nothing closed.
+- **Single- or several-valued, a different value:** a frame match only
+  nominates the pair. It is closed without a model only when both facts
+  carry the slot's canonical predicate, the subjects are the same resolved
+  entity, the values are resolved entities, the attribute is single-valued
+  and the old fact has a recorded origin. Every other pair (at most
+  `SLOT_CLASSIFY_MAX` = 2 per fact, the newest) goes to the classifier:
+  `update` or `contradiction` closes the old value, `duplicate` stores
+  nothing, `new` keeps both. With no answer (model unavailable or timed out)
+  both stay active and the decision is `conflict_unresolved`.
+- **Closing** sets `superseded_by`, `valid_to` and
+  `metadata.superseded_reason` (`changed` for an update, `contradicted` for a
+  contradiction); the new row lists the closed ids once in
+  `metadata.supersedes`. Nothing is deleted. A fact never closes itself, and
+  only an active fact is closed.
+- **An older event** (the new fact's `event_time` before the old fact's)
+  never replaces the current value: the new fact is stored closed on arrival,
+  as the earlier value (`superseded_by` the current fact, valid from its own
+  event time to the current fact's, reason `earlier`, action
+  `stored_history`), and recall shows it after the current value.
+- **One transaction.** The insert and every close run in the insert's
+  transaction (`store_fact(after_insert=...)`), under a per-slot advisory
+  lock that re-reads the slot; a value another writer stored meanwhile
+  restarts the decision (at most three times, then the fact is stored with
+  nothing closed). Two concurrent values leave exactly one current.
 
-Trust order (`graph_schema.AUTHORITY_ORDER`: operator-confirmed, user-stated,
-CRM, tool, agent-generated, external) decides whether a change may close a
-value: a source ranked below the value's own does not replace it. The new fact
-is stored overruled by it (inactive, `superseded_by` the kept fact) and the
-result's `action` is `kept_authority` (`kept_confirmed` for an
-operator-confirmed value); the write path counts it in `facts_skipped`. The
-LLM path applies the same rule. A NULL origin ranks as agent-generated.
+**Trust order** (`graph_schema.AUTHORITY_ORDER`: operator-confirmed,
+user-stated, CRM, tool, agent-generated, external) decides whether a change
+may close a value, on the slot path and the classifier path alike: a source
+ranked below the value's own does not replace it. A fact with no recorded
+origin (written before origins existed, so possibly a user's own statement)
+is closed only by a user statement or the operator, never deterministically,
+and never by CRM, a tool, an agent or an external source; a caller that
+records no origin either keeps the old behaviour. When the order forbids a
+change, the new fact is stored overruled by the kept fact (inactive,
+`superseded_by` it) and the result's `action` is `kept_authority`
+(`kept_confirmed` for an operator-confirmed value); the same sentence seen
+again reuses that row rather than adding one. The write path counts it in
+`facts_skipped`.
+
+**Forget** works on a replaced value too (the Helm's Memory page): it is
+marked `metadata.forgotten`, keeps its validity bound, and is never shown
+again; a second forget is a 409.
 
 An operator-confirmed match (`metadata.operator_confirmed`, set by an edit in
 the Helm) is never superseded: the new fact is stored superseded by it and the
@@ -586,7 +655,7 @@ result = await resolve_and_store(
     source_type="email",
 )
 # result["action"] is one of: "stored", "skipped", "superseded", "reinforced",
-#   "kept_confirmed", "kept_authority", "supersede_skipped"
+#   "kept_confirmed", "kept_authority", "supersede_skipped", "stored_history"
 # If superseded: result["old_id"] points to the fact that was deactivated
 #   (a slot change also lists every closed value in result["old_ids"])
 ```
@@ -1221,13 +1290,14 @@ guarantees, tested:
   (`relations_private_deferred`).
 
 **Latency.** `store_memory` makes the one extraction call (70 s budget) and,
-only for a fact with a similar existing one that no slot decided, the one
-conflict-classification call; past the call's 105 s budget a fact is stored as
-new (`conflict_checks_timed_out`, `metadata.conflict_check = "timed_out"`), and
-nothing is superseded without a classification or a same-slot value change. A
-fact with a slot costs one more statement (the slot lookup); a slot decision
-replaces the classification call. Every database step runs off the event
-loop.
+when the fact's slot already has another value, up to `SLOT_CLASSIFY_MAX`
+(2) conflict-classification calls (none when a resolved-entity rule decides),
+otherwise one when it has a similar existing fact; past the budget a fact is
+stored as new (`conflict_checks_timed_out`, `metadata.conflict_check =
+"timed_out"`), and nothing is superseded without a classification or a
+resolved-entity change. A fact with a slot costs one more statement (the slot
+lookup) and, when it is stored, two more inside the insert's transaction (the
+slot lock and re-read). Every database step runs off the event loop.
 
 ### Who can read a fact
 
