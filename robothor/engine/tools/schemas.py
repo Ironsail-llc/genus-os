@@ -648,68 +648,6 @@ _PLUGIN_SCHEMAS: dict[str, dict[str, Any]] = {
     },
 }
 
-#: The organisation rollup (``handlers/org.py``). Its own block, outside
-#: ``get_engine_schemas``, for the size-ratchet reason above.
-_ORG_SCHEMAS: dict[str, dict[str, Any]] = {
-    "org_overview": {
-        "type": "function",
-        "function": {
-            "name": "org_overview",
-            "description": (
-                "How every tenant this run may reach is doing, in one call: your own tenant, "
-                "then each child tenant you are allowed into. Per tenant: runs, failures "
-                "and cost over 24 hours and 7 days, stuck agents, overdue schedules, "
-                "overdue tasks with their age, last activity and a status. Read-only. "
-                "Use it FIRST when asked how the organisation's tenants are doing; then "
-                "pass `tenant` to list_tasks, list_agent_runs and the other tools that "
-                "accept it to look inside one."
-            ),
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    "org_watch": {
-        "type": "function",
-        "function": {
-            "name": "org_watch",
-            "description": (
-                "What changed across every tenant this run may reach since the "
-                "last watch: an agent that started failing, a stuck agent, a late schedule, "
-                "a newly overdue task, a tenant that went quiet or could not be read, and "
-                "each of those clearing. A problem is reported once, not on every call. "
-                "Returns `changes`, a plain-language `briefing` (empty when nothing "
-                "changed), `as_of`, `tenants_seen` and `limited` (true, with a `note`, when "
-                "this run reaches only its own tenant). For a heartbeat: call it, and send "
-                "the briefing to the owner only when it is not empty. It never sends "
-                "anything itself. On a heartbeat or other scheduled run it stores what it "
-                "saw, so the next call reports only newer changes; `preview: true` does "
-                "not store, and a run started by a person in chat never stores (its "
-                "`note` says so). `daily: true` adds every "
-                "tenant's state, persisting problems included. For a question asked in "
-                "chat, use org_overview instead."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "daily": {
-                        "type": "boolean",
-                        "description": (
-                            "Also summarise every tenant's current state, problems first. "
-                            "Default false."
-                        ),
-                    },
-                    "preview": {
-                        "type": "boolean",
-                        "description": (
-                            "Report the changes without storing them, so the next call "
-                            "reports them again. Default false."
-                        ),
-                    },
-                },
-            },
-        },
-    },
-}
-
 _REMOTE_TENANT = {
     "type": "string",
     "description": "The child tenant's id, as org_tools lists it.",
@@ -784,6 +722,69 @@ _ORG_REMOTE_SCHEMAS: dict[str, dict[str, Any]] = {
                     },
                 },
                 "required": ["tenant", "tool"],
+            },
+        },
+    },
+}
+
+#: The organisation rollup (``handlers/org.py``). Its own block, outside
+#: ``get_engine_schemas``, for the size-ratchet reason above.
+_ORG_SCHEMAS: dict[str, dict[str, Any]] = {
+    **_ORG_REMOTE_SCHEMAS,
+    "org_overview": {
+        "type": "function",
+        "function": {
+            "name": "org_overview",
+            "description": (
+                "How every tenant this run may reach is doing, in one call: your own tenant, "
+                "then each child tenant you are allowed into. Per tenant: runs, failures "
+                "and cost over 24 hours and 7 days, stuck agents, overdue schedules, "
+                "overdue tasks with their age, last activity and a status. Read-only. "
+                "Use it FIRST when asked how the organisation's tenants are doing; then "
+                "pass `tenant` to list_tasks, list_agent_runs and the other tools that "
+                "accept it to look inside one."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "org_watch": {
+        "type": "function",
+        "function": {
+            "name": "org_watch",
+            "description": (
+                "What changed across every tenant this run may reach since the "
+                "last watch: an agent that started failing, a stuck agent, a late schedule, "
+                "a newly overdue task, a tenant that went quiet or could not be read, and "
+                "each of those clearing. A problem is reported once, not on every call. "
+                "Returns `changes`, a plain-language `briefing` (empty when nothing "
+                "changed), `as_of`, `tenants_seen` and `limited` (true, with a `note`, when "
+                "this run reaches only its own tenant). For a heartbeat: call it, and send "
+                "the briefing to the owner only when it is not empty. It never sends "
+                "anything itself. On a heartbeat or other scheduled run it stores what it "
+                "saw, so the next call reports only newer changes; `preview: true` does "
+                "not store, and a run started by a person in chat never stores (its "
+                "`note` says so). `daily: true` adds every "
+                "tenant's state, persisting problems included. For a question asked in "
+                "chat, use org_overview instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "daily": {
+                        "type": "boolean",
+                        "description": (
+                            "Also summarise every tenant's current state, problems first. "
+                            "Default false."
+                        ),
+                    },
+                    "preview": {
+                        "type": "boolean",
+                        "description": (
+                            "Report the changes without storing them, so the next call "
+                            "reports them again. Default false."
+                        ),
+                    },
+                },
             },
         },
     },
@@ -2919,7 +2920,6 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
     }
 
     schemas.update(_VAULT_SCHEMAS | _CONFIG_SCHEMAS | _PLUGIN_SCHEMAS | _ORG_SCHEMAS)
-    schemas.update(_ORG_REMOTE_SCHEMAS)
 
     # ── Knowledge Vault (verbatim memory store; RIP 12) ──
     # Distinct from the secrets vault above. Stores reference data the agent

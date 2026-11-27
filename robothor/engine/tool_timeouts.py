@@ -41,6 +41,7 @@ from typing import Any
 
 from robothor.engine.tool_self_timed import SELF_TIMED_GRACE_SECONDS, self_timed_ceiling
 from robothor.engine.wrapped_call import inner_call
+from robothor.tenancy.remote_contract import HOME_TIMEOUT_S
 
 __all__ = [
     "HARNESS_BUDGETED_TOOLS",
@@ -122,4 +123,6 @@ def resolve_tool_timeout(tool_name: str, configured: int, arguments: Any = None)
         return max(configured, ceiling)
     if tool_name in LONG_RUNNING_TOOLS:
         return max(configured, LONG_RUNNING_FLOOR_SECONDS)
+    if tool_name in ("org_tool_read", "org_tool_write"):  # waits HOME_TIMEOUT_S on the bridge
+        return max(configured, HOME_TIMEOUT_S + SELF_TIMED_GRACE_SECONDS)
     return configured
