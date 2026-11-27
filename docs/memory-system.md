@@ -71,11 +71,12 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      default**) — raw conversation segments from `search_segment_legs` (see
      [Conversation segments](#conversation-segments)), kind `segment`. They
      are the segment store's dense and keyword legs, entered into fusion
-     separately as the fact legs are, so a segment both legs found gets the
-     same fused credit as a fact both fact legs found. (One pre-fused
-     `segment` leg used to cap a segment at half of that, and with many
-     two-leg facts about the person a question names the answer segment
-     fused at rank 61, past the reranker.) Each
+     separately at half weight each (`LEG_WEIGHTS`), so a segment both found
+     scores what the single pre-fused `segment` leg gave it and the default
+     ranking is unchanged. Full weight was measured and rejected: segments
+     took about half of the reranker's head in the fact strata of the memory
+     evaluation's world and pushed the facts that answer multi-hop and
+     point-in-time questions out of the context. Each
      row's `fact_text` is the whole verbatim text; the reranker reads only a
      `SEGMENT_RERANK_CHARS` (1,200) excerpt around the best keyword match
      (`rerank_excerpt`). Which segments come back depends on the reader:
@@ -103,12 +104,16 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    returns. When one of the two is not listed, its logprob is bounded by the
    lowest one listed, so a confident answer still gets a graded score. (An
    Ollama without logprobs gives 1 or 0.) Candidates are ordered by that
-   score alone, whichever leg found them. A segment found by only one of its
-   legs still fuses below every fact both fact legs found, so the first row
-   of each segment leg that fused below the scored head takes one of the
-   head's last places (`facts._segment_leaders_in_head`); the rows it
-   displaces follow in fused order. On any reranker error the fused order
-   stands.
+   score alone, whichever leg found them. A question about a subject that
+   many extracted facts name fills the scored head with facts both fact legs
+   found, and the segment that holds the answer fuses below it. So when the
+   head holds no segment at all, the best one (the first segment of the
+   fused list) is scored as one more pair (`facts._segment_to_judge`). It
+   takes a place only when judged relevant (score at least
+   `reranker.RELEVANT_SCORE`, 0.5); otherwise it is dropped and the result is
+   exactly what it is without it. A segment the head already holds costs
+   nothing extra. On any reranker error, or with the reranker unavailable,
+   the judged segment is dropped and the fused order stands.
 4. **Blend** — `relevance` (the rerank score, or `10 / (10 + fused rank)` when
    there is none — one 0..1 scale for every leg; cosine similarity is not used)
    + recency + importance + access count, with supersession demotion; then
