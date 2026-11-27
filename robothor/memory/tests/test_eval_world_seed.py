@@ -398,6 +398,37 @@ class TestSeedAndCleanup:
         assert as_reader, "the eval reader recalls the world's conversations"
         assert as_nobody == [], "the world's conversations are private to the eval reader"
 
+    @pytest.mark.asyncio
+    async def test_conversation_recall_answers_are_indexed_as_long_reader_segments(
+        self, eval_tenants
+    ):
+        """The conversation_recall stratum's conversations go through the chat
+        path into segments like every world conversation: each answer is in a
+        segment the eval reader owns, and the near and far answers sit in
+        segments longer than an excerpt (1,200 characters)."""
+        from robothor.db.connection import get_connection, tenant_scope
+
+        primary, shadow = eval_tenants
+        world = ew.generate_world(3, "small")
+        seeded = await seed.seed_world(
+            world, primary, shadow_tenant_id=shadow, embed_batch=_fake_embed_batch
+        )
+        with tenant_scope(primary), get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT text, scope_id FROM memory_segments WHERE tenant_id = %s", (primary,)
+            )
+            rows = cur.fetchall()
+        owner = f"person:{seeded.reader_person_id}"
+        cases = [c for c in world.cases if c.stratum == "conversation_recall"]
+        assert cases
+        for case in cases:
+            holding = [text for text, scope in rows if any(g in text for g in case.gold)]
+            assert holding, case.id
+            assert {scope for text, scope in rows if text in holding} == {owner}, case.id
+            if case.id.endswith((":near", ":far")):
+                assert max(len(t) for t in holding) > 1200, case.id
+
 
 class TestRunWorldLegSwitches:
     @pytest.mark.asyncio
