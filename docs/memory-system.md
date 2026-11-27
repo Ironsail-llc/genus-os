@@ -1369,9 +1369,11 @@ guarantees, tested:
 
 **Latency.** `store_memory` makes the one extraction call (70 s budget) and,
 when the fact's slot already has another value, up to `SLOT_CLASSIFY_MAX`
-(2) slot-judge calls (3 in all across restarts; none for a repeat or a
+(3) slot-judge calls (3 in all across restarts; none for a repeat or a
 multi-valued value), otherwise one classification when it has a similar
-existing fact; past the budget a fact is
+existing fact. All of them share what is left of the call's budget: each
+gets only the remainder, and once it is spent no further pair is asked (the
+unasked ones are recorded as open conflicts) and the fact is
 stored as new (`conflict_checks_timed_out`, `metadata.conflict_check =
 "timed_out"`), and nothing is superseded without the judge or the classifier. A fact with a slot costs one more statement (the slot
 lookup) and, when it is stored, two more inside the insert's transaction (the
