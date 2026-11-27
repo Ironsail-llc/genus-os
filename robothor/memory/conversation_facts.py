@@ -20,8 +20,10 @@ exchange as it happened:
   window. A fact citing an assistant turn, a context turn or a number that
   points nowhere is the assistant's (``agent_generated``); one citing no window
   turn at all is dropped. A fact citing a user turn written by someone other
-  than the owner, or one relaying someone else's words (a paste, a quotation,
-  a forwarded message: :func:`is_relayed`), is ``external``. Assistant text
+  than the owner is ``external``, and so is one whose supporting quote lies
+  inside a span relaying someone else's words (a paste, a quotation, a
+  forwarded message: :func:`relayed_spans`); the user's own words beside such
+  a span stay theirs. Assistant text
   never becomes a user-stated fact;
 * each fact keeps the chat message ids it came from (``turn_refs``) and when it
   was said (``mentioned_at``), so it can be linked back to its source turns;
@@ -93,6 +95,7 @@ CONVERSATION_EXTRACTION_SCHEMA: dict[str, Any] = {
                     "confidence",
                     "event_time",
                     "date_phrase",
+                    "quote",
                     "about_user",
                     "speaker",
                     "turns",
@@ -106,6 +109,7 @@ CONVERSATION_EXTRACTION_SCHEMA: dict[str, Any] = {
                     "confidence": {"type": "number"},
                     "event_time": {"type": ["string", "null"]},
                     "date_phrase": {"type": ["string", "null"]},
+                    "quote": {"type": ["string", "null"]},
                     "about_user": {"type": "boolean"},
                     "speaker": {"type": "string", "enum": SPEAKERS},
                     "turns": {"type": "array", "items": {"type": "integer"}},
@@ -173,33 +177,79 @@ def _label(turn: ConversationTurn) -> str:
 
 
 # ── relayed text ────────────────────────────────────────────────────────────
-# A user turn that carries someone else's words (a pasted email, a forwarded
-# message, a quotation) is the user relaying, not stating: what it says about
-# third parties, or about the user, is the other author's claim. Recognised
-# only when the turn marks it; a paste with no marker reads as the user's own.
+# A user turn may carry someone else's words (a pasted email, a forwarded
+# message, a quotation). What lies inside such a span is the other author's
+# claim, not the user's; the user's own words around it stay the user's. A span
+# is recognised only when the turn marks it; a paste with no marker reads as the
+# user's own. A code fence is not a marker: it is how people share code.
 
-_RELAY_LINE = re.compile(
-    r"^\s*(>|```|(from|to|cc|subject|sent|date)\s*:|-{3,}\s*(original|forwarded)"
-    r"|begin forwarded message)",
+_QUOTE_LINE = re.compile(r"^[ \t]*>.*$", re.MULTILINE)
+_HEADER_LINE = re.compile(
+    r"^[ \t]*(from|to|cc|bcc|subject|sent|date|reply-to)[ \t]*:", re.IGNORECASE
+)
+_SEPARATOR = re.compile(
+    r"^[ \t]*(-{3,}[ \t]*(original|forwarded)[^\n]*|begin forwarded message[^\n]*)$",
     re.IGNORECASE | re.MULTILINE,
 )
-_RELAY_LEAD = re.compile(
-    r"\b(here'?s|here\s+is|below\s+is|this\s+is|i\s+got|i\s+received|forwarding|forwarded"
-    r"|i'?m\s+pasting|pasting|pasted|copied|copy\s+of)\b[^\n]{0,40}?"
-    r"\b(e-?mail|message|text|letter|post|article|note|thread|reply|response|chat)\b[^\n]*:\s*$"
-    r"|\b(wrote|writes|says|said)\s*:\s*$",
+_LEAD_IN = re.compile(
+    r"^[^\n]*?(\b(here'?s|here\s+is|below\s+is|this\s+is|i\s+got|i\s+received|forwarding"
+    r"|forwarded|i'?m\s+pasting|pasting|pasted|copied|copy\s+of)\b[^\n]{0,40}?"
+    r"\b(e-?mail|message|text|letter|post|article|note|thread|reply|response|chat)\b[^\n]*"
+    r"|\b(?!i\b)[a-z]+[ \t]+(wrote|writes|says|said))[ \t]*:[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
+
+
+def relayed_spans(text: str) -> list[tuple[int, int]]:
+    """``(start, end)`` character spans of ``text`` that carry someone else's words.
+
+    * each quoted line (``>``);
+    * from the first of two or more consecutive email header lines (From:, To:,
+      Cc:, Subject:, Sent:, Date:, Reply-To:) to the end;
+    * from a forwarded or original-message separator to the end;
+    * after a line introducing a paste ("here's an email I got:", "my wife
+      wrote:"; not "I said:") to the end.
+    """
+    spans = [(m.start(), m.end()) for m in _QUOTE_LINE.finditer(text)]
+    lines = text.splitlines(keepends=True)
+    pos, run_start, run = 0, 0, 0
+    for line in lines:
+        if _HEADER_LINE.match(line):
+            if run == 0:
+                run_start = pos
+            run += 1
+            if run == 2:
+                spans.append((run_start, len(text)))
+        else:
+            run = 0
+        pos += len(line)
+    spans += [(m.start(), len(text)) for m in _SEPARATOR.finditer(text)]
+    spans += [(m.end(), len(text)) for m in _LEAD_IN.finditer(text) if m.end() < len(text)]
+    return sorted(spans)
 
 
 def is_relayed(text: str) -> bool:
-    """Whether a turn marks part of itself as someone else's words.
+    """Whether a turn marks any part of itself as someone else's words."""
+    return bool(relayed_spans(text))
 
-    Markers: quoted lines (``>``), a code fence, email header lines (From:,
-    To:, Subject:, Sent:, Date:), a forwarded or original-message separator, or
-    a line introducing a paste ("here's an email I got:", "she wrote:").
+
+def _from_relayed_span(turn: ConversationTurn, quote: Any) -> bool:
+    """Whether a fact drawn from ``turn`` comes from inside one of its relayed spans.
+
+    True when its supporting quote lies inside a span, and when the turn has a
+    span but the quote is missing or is not in the turn (it cannot be shown to
+    be the user's own words).
     """
-    return bool(_RELAY_LINE.search(text) or _RELAY_LEAD.search(text))
+    spans = relayed_spans(turn.text)
+    if not spans:
+        return False
+    if not isinstance(quote, str) or not quote.strip():
+        return True
+    words = [re.escape(w) for w in quote.split()]
+    found = re.search(r"\s+".join(words), turn.text, re.IGNORECASE)
+    if found is None:
+        return True
+    return any(lo <= found.start() and found.end() <= hi for lo, hi in spans)
 
 
 #: What opens each continuation line of a turn's text. A turn's own text can
@@ -271,6 +321,8 @@ How to write each fact:
   a name in brackets, or as another person, was said by that person, not by the
   user: write its facts about them by name, with about_user false.
 - turns: the numbers of the new turns the fact comes from.
+- quote: the exact words of the turn the fact is drawn from, copied as written
+  (a short phrase is enough).
 - kind: preference, possession, plan, state, event, recommendation or other.
 - event_time: when the thing happened or will happen, as an ISO date
   (YYYY-MM-DD) or date-time. Resolve relative dates ("yesterday", "last
@@ -389,8 +441,9 @@ def parse_conversation_response(
     ``confidence``, ``mentions``, ``relations``, ``event_time``, ``entities``)
     and this mode's: ``speaker_role`` (``user`` only when the model says so and
     every number it cites is a user turn inside the window; ``external`` when
-    any cited user turn is someone else's or relays someone else's words
-    (:func:`is_relayed`); else ``assistant``), ``about_user``, ``kind``, ``turn_refs`` (the chat message
+    any cited user turn is someone else's, or the fact's quote lies in a span
+    relaying someone else's words (:func:`relayed_spans`); else
+    ``assistant``), ``about_user``, ``kind``, ``turn_refs`` (the chat message
     ids of the window turns it cites) and ``mentioned_at``. A fact citing no
     window turn (only context turns, which were extracted before, or numbers
     that point nowhere) is dropped. The default quality filters apply, except
@@ -406,7 +459,10 @@ def parse_conversation_response(
         if not cites.positions:
             continue  # no window turn: extracted before, or linked to nothing
         cited = [window[p] for p in cites.positions]
-        if any(t.role == "user" and (not t.author_is_owner or is_relayed(t.text)) for t in cited):
+        if any(
+            t.role == "user" and (not t.author_is_owner or _from_relayed_span(t, item.get("quote")))
+            for t in cited
+        ):
             speaker_role = "external"  # someone else's words, whoever relayed them
         elif item.get("speaker") == "user" and cites.all_user:
             speaker_role = "user"
