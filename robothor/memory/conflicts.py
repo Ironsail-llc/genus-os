@@ -2223,6 +2223,8 @@ async def resolve_and_store(
             new_id,
             tenant_id=tenant_id,
             classification=kind,
+            # Recorded on both rows, so recall shows the replaced value.
+            reason="changed",
         ):
             await _record(action="superseded", new_fact_id=new_id)
             return {
