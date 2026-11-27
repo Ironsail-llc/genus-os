@@ -92,6 +92,11 @@ EXPECTED_TENANT_SCOPE: dict[str, int] = {
     "robothor/engine/runtime/task_receipts.py::remember_existing": 1,
     "robothor/engine/runtime/task_recovery.py::sweep": 2,
     "robothor/engine/runtime/task_recovery.py::verify": 1,
+    # ── The remote-tool request ledger, in this engine's OWN tenant (the
+    # authenticated bridge token's, which engine/auth.py pins to this engine) ──
+    "robothor/engine/remote_tools.py::claim_request": 1,
+    "robothor/engine/remote_tools.py::finish_request": 1,
+    "robothor/engine/remote_tools.py::release_request": 1,
     # ── Other fixed bindings ──
     # A coding job's rows, in the tenant that owns the job.
     "robothor/engine/coding/jobs.py::PgJobStore._connect._scoped": 1,
