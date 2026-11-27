@@ -1184,11 +1184,16 @@ no room scope.
 
 **One run at a time.** Each conversation has one watermark row in
 `ingested_items` (`source_name = 'conversation_facts'`; its `content_hash`
-holds `through|failures|failed_end|claim|claimed_until`). A run claims it
-under `SELECT … FOR UPDATE`, so engine processes never extract the same window
-twice; a claim lapses after 15 minutes if its run died, and a run that finds
-the conversation claimed looks again 30 seconds later. Every database call
-runs off the event loop.
+holds `through|failures|failed_end|claim|claimed_until`, and its `fact_ids`
+the message ids recently extracted). A run claims it under
+`SELECT … FOR UPDATE`, so engine processes never extract the same window twice.
+The claim lasts five minutes and is renewed after each window's extraction; a
+run that cannot renew it writes nothing more. A run that finds the
+conversation claimed looks again every 30 seconds for longer than a claim
+lasts, and the holder, when it finishes, schedules a follow-up for turns
+stored meanwhile. A watermark that does not parse is never read as zero: it
+starts at the conversation's last message and logs an error. Every database
+call runs off the event loop.
 
 **Windows, each extracted once.** The turns past the watermark are split into
 windows of at most 20 turns and 12,000 characters, in order; the model reads at
@@ -1197,23 +1202,35 @@ not see. Each window is one model call, with the strict
 `CONVERSATION_EXTRACTION_SCHEMA`; up to four earlier turns are shown read-only,
 so a reply is read with what it answers. After a window is written the
 watermark moves to its last message id. A failed extraction, or a fact that
-could not be stored, leaves it there for the next run; a window that fails
-three runs in a row is recorded as skipped (`conversation_facts_skipped`,
-logged and counted in `windows_skipped`) and passed over. A valid answer with no
-facts is final. `MEMORY_INGEST_SKIP_GENERATED` (default off) still leaves the
+could not be stored, leaves it there for the next run. Only an answer the model
+gave counts toward skipping (empty, or not the JSON asked for): a window it
+answered that way three runs in a row is recorded as skipped
+(`conversation_facts_skipped`), logged with the tenant's skipped count, counted
+in `windows_skipped`, and passed over. An unreachable, timed-out or erroring
+model server never counts and never moves the watermark. `python -m
+robothor.memory.conversation_skips --tenant <id>` lists the skipped windows and
+their count; `--retry` extracts each again and clears it, leaving listed any
+that still fail. A valid answer with no facts is final. `MEMORY_INGEST_SKIP_GENERATED` (default off) still leaves the
 agent's own briefings out of the window.
 
 **Follow-up runs, not waiting.** Rows written in the last five seconds, and
 the user turn a fresh reply answers, are held back for a follow-up run: a lower
 message id committed a moment later by a second writer on the same session
-would otherwise fall behind the watermark for good. A follow-up is also
-scheduled when the exchange that triggered the run is not stored yet, and when
-the backlog is longer than one run's five windows, so it drains without waiting
-for the next message. At most 20 follow-ups follow one exchange.
+would otherwise fall behind the watermark. A follow-up is also scheduled when
+the exchange that triggered the run is not stored yet, and when the backlog is
+longer than one run's five windows, so it drains without waiting for the next
+message. At most 20 follow-ups follow one exchange. Follow-ups live in the
+process: one lost to a restart strands nothing, because the watermark never
+passed the turns it was for, and the conversation's next run takes them. A
+writer that stays open longer than the hold is covered too: each run reads this
+conversation's rows below the watermark written in the last 15 minutes that are
+not among the recently extracted ids, and extracts them once (they are never
+skipped, and stop being looked for as they age).
 
 **History before this release.** A conversation the previous ingest had seen
-starts past the last message it had seen, so its history is not extracted
-again into private copies. The facts that ingest wrote stay as they are,
+(its row under the conversation's tenant, or under the default tenant, where
+it wrote them) starts past the last message it had seen, so its history is not
+extracted again into private copies. The facts that ingest wrote stay as they are,
 `shared`, until the operator runs the backfill below.
 
 **What the model is shown and asked.** Each turn starts at the margin as
@@ -1225,8 +1242,8 @@ what the assistant recommended or listed with the items kept, and facts about
 named things. A first-person statement becomes a fact about "the user"
 (`about_user`), with no named entity needed. Per fact it returns the speaker,
 the turn numbers it comes from, a `kind` (preference, possession, plan, state,
-event, recommendation, other), an `event_time` and the `date_phrase` it was
-taken from.
+event, recommendation, other), an `event_time`, the `date_phrase` it was
+taken from, and the `quote` of the turn the fact is drawn from.
 
 **Trust.** Decided from the turns a fact cites, never from the model alone:
 
@@ -1237,25 +1254,36 @@ taken from.
 | a user turn written by someone other than the owner, or one relaying someone else's words | `external` |
 | no turn of the window at all | dropped |
 
-A user turn is the owner's when its recorded author is the owner's member, or
-when it names no author and the session has one human sender by construction
-(the operator's main session, a member's own webchat session, a private
-Telegram chat, a session the CRM routed to one person) and no other author has
-spoken in it. A turn by anyone else is labelled with its author's name, or as
-another person. A turn relays someone else's words when it marks them: quoted
-lines (`>`), a code fence, email header lines (From:, To:, Subject:, Sent:,
-Date:), a forwarded or original-message separator, or a line introducing a
-paste ("here's an email I got:", "she wrote:"). The whole turn's facts are then
-external, including what the user said around the paste. Not caught: a paste
-with no marker, and a model citing a user turn for a claim that turn does not
-make.
+Who wrote a user turn is taken from what the turn records, never assumed.
+Telegram stores each turn's sender id (`sender_telegram_id`) and webchat the
+authenticated member (`sender_user_id`). A turn is the owner's when its sender
+is a private chat's own person (`telegram:{id}`, sender `{id}`), the operator in
+a main session whose default chat is a direct chat, a member who is the owner
+(the scope's member, or linked to the scope's person), or any member in a main
+session with one sender by construction (direct default chat, per-user
+sessions on). A turn with no sender recorded is the owner's only in a member's
+own session (`agent:{agent}:user:{uid}`). Every other user turn is labelled
+with its author's name, or as another person, and its facts are external.
+
+A fact is external, too, when its quote lies inside a span relaying someone
+else's words: a quoted line (`>`), a block of two or more email header lines
+(From:, To:, Cc:, Subject:, Sent:, Date:), a forwarded or original-message
+separator, or what follows a line introducing a paste ("here's an email I
+got:", "my wife wrote:", not "I said:"). A fact without a quote, or one the
+turn does not contain, in a turn that has such a span is external. The user's
+own words beside the span stay theirs; a code fence is not a marker. Not
+caught: a paste with no marker, and a model citing a user turn for a claim that
+turn does not make.
 
 **Dates.** The computed date only corrects the model's: when the model returned
 a date and the phrase it dated from, and that phrase, read in its own clause of
 a cited turn and counted from that turn's local day, names exactly one day
-within a week of the model's (`robothor/memory/relative_dates.py`). It never
-fills an empty event time, never touches a date the model took from elsewhere,
-and a date the turn states itself is never rewritten in the fact text. Named:
+within three days of the model's (`robothor/memory/relative_dates.py`). A
+week apart is a different reading (a speaker correcting themselves, "last
+Tuesday" meant as the week before) and is left alone. It never fills an empty
+event time, never replaces a date the cited turn writes out itself
+(2026-11-22, November 22), and never rewrites one in the fact text. "Last
+<weekday>" is the most recent such day before the turn's. Named:
 yesterday, today, tomorrow, the day before or after, N days or weeks ago, last
 <weekday>, and "in N days or weeks" only when the clause points forward ("I'm
 flying in two weeks", "due in 3 weeks", "in 2 days' time"). Not named: vague
@@ -1299,11 +1327,16 @@ that are gone. No migration.
 **Backfill of older facts (operator-run).** Facts the previous ingest wrote
 from one-to-one conversations are still `shared`. `python -m
 robothor.memory.conversation_backfill --tenant <id>` reports, changing
-nothing, which of them it would move and to whose scope, and which it leaves
-shared (rooms, conversations with no known owner, sessions that are gone);
-`--apply` moves them in resumable batches (`--batch`, `--restart`). Edges
-already drawn from those facts are counted, not removed. Nothing runs it
-automatically.
+nothing, which of them it would move and to whose scope, which it leaves shared
+(rooms, conversations with no known owner, sessions that are gone), and the
+duplicates, edges and nodes it would remove; `--apply` does it in resumable
+batches (`--batch`, `--restart`). Copies that meet in one scope with the same
+text keep the oldest. Each moved fact leaves the shared graph as a private
+write never enters it: its evidence rows go and its relations are kept on it
+(`metadata.graph_pending_relations`), an edge left with no evidence is deleted,
+and a node nothing shared names any more (not CRM-linked, no contact
+identifier, no shared mention, no edge) is removed with its private mentions
+and decisions. Nothing runs it automatically.
 
 **Cost.** Counted from the prompts (input tokens at four characters a token,
 user turns of about 200 characters and assistant turns of about 600): before,
@@ -1698,7 +1731,8 @@ reports `facts_processed`, `fact_ids`, `mentions_written`, `relations_stored`,
 Conversation ingest keeps one watermark row per conversation in
 `ingested_items` (`source_name = 'conversation_facts'`, `item_id` the session
 key; `content_hash` holds the last `chat_messages.id` extracted and the run's
-claim), and one row per window it skipped (`conversation_facts_skipped`); see
+claim), and one row per window it skipped (`conversation_facts_skipped`; listed and retried by `python -m
+robothor.memory.conversation_skips`); see
 [Conversation facts](#conversation-facts).
 
 Content hashing prevents re-processing the same data:
