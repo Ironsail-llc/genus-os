@@ -29,7 +29,9 @@ Two things are deliberately **not** shared between tenants, even parent and
 child: data (every tenant-scoped row is isolated by row-level security) and
 connectors (each tenant has its own vault rows and its own engine). A parent's
 agent can still read and act in a child, one audited call at a time, inside
-that child's scope (see [Agents in a parent tenant](#agents-in-a-parent-tenant)).
+that child's scope (see [Agents in a parent tenant](#agents-in-a-parent-tenant)),
+and can use a child's own connectors through the child's engine (see
+[Using a child's connectors](#using-a-childs-connectors)).
 
 ## Order of operations
 
@@ -138,6 +140,47 @@ Every tenant shares one vault master key. A credential the bridge stores while a
 - **Google Workspace** is not a vault row: it is a file secret mounted into one
   engine (`engine.googleWorkspace` in the chart). Give each tenant's engine its
   own secret. Two engines sharing one would read and send one mailbox for both.
+
+### Using a child's connectors
+
+A connector is never copied to the parent. Instead the parent's agent calls
+the child's tool where it lives: home engine → bridge (`POST
+/api/org/remote/call`) → the child's engine, which runs the tool with its own
+credentials, permissions and audit and returns the result. The child offers
+only the tools its plugins declare remote, each as a read or a write
+([Plugins](../PLUGINS.md)). The agent's tools are `org_tools`, `org_tool_read`
+and `org_tool_write` ([Tools](../TOOLS.md#a-child-companys-own-tools-org_tools-org_tool_read-org_tool_write));
+the Command centre's connections view (`GET /api/org/connections`) shows the
+same catalogue and each plugin's health to the parent's owner or admin.
+
+| Caller | Read a child's tool | Write through a child's tool |
+|-----|---------|---------|
+| The parent's verified `owner`, in chat | Yes | Yes |
+| The parent's verified `admin`, in chat | Yes | No |
+| An unattended run (cron and heartbeat, hook, event, workflow) | Only with both grants under [The unattended grant](#agents-in-a-parent-tenant) **and** the child granting its `parent_agent` role on that tool | Never |
+| A sub-agent, a benchmark run, a member, a viewer, a person signed in to a child | No | No |
+
+What has to be in place:
+
+1. The child's plugin declares the tool remote, and is enabled in the child.
+2. `GENUS_ORG_REMOTE_TOOLS` is `read`, `dry_run` or `full` on the parent's
+   engine, the bridge and the child's engine (the flag ladder is in
+   [GUARDRAIL_FLIPS.md](GUARDRAIL_FLIPS.md)).
+3. If the tool requires an attestation, the bridge's
+   `GENUS_ORG_REMOTE_ATTESTATIONS` lists it. The bridge presents its own
+   value; a request cannot claim one.
+4. The parent's agent is in the bridge's capabilities manifest with
+   `GET /api/org/remote/*` and `POST /api/org/remote/call` in its
+   `bridge_endpoints`; the engine's token for these routes carries the
+   `org:remote` scope, which nothing else grants.
+5. For unattended reads only: the child grants `parent_agent` on that tool.
+   The role has no permission rows by default, so it is denied everything
+   until granted.
+
+Every call leaves a row on each side: `agent.cross_tenant_call` under the
+parent (with `details.remote_tool`), `org.remote_call` under the child from the
+bridge, and `agent.remote_tool_call` under the child from its engine, which
+carries a digest of the arguments, never the arguments.
 
 ## Plugins are per tenant
 
@@ -541,7 +584,9 @@ v2:
 
 Either one alone grants nothing. With both, the agent's unattended runs can use
 the allowlisted reads in every child, and of the writes only create a task or
-send a notification. The grant covers unattended runs only: the same agent
+send a notification. They may also read through a child's connectors where
+the child grants `parent_agent` on that tool, and never write through them
+([Using a child's connectors](#using-a-childs-connectors)). The grant covers unattended runs only: the same agent
 answering a person on chat reaches the children only when that person is a
 verified `owner` or `admin` of the parent. Revoke by setting either back to false; the next run picks
 it up.
