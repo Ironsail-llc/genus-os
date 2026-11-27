@@ -295,3 +295,50 @@ def test_the_command_runs_to_the_end(world: World, capsys: Any) -> None:
     assert main(["--tenant", TENANT, "--apply", "--batch", "1"]) == 0
     report = _json.loads(capsys.readouterr().out)
     assert report["rescoped"] == 2 and report["more"] is False
+
+
+# ═══ what consolidation built from old conversation facts ════════════════
+
+
+def _consolidated(world: World, text: str, members: list[int]) -> int:
+    new = int(
+        world.db.one(
+            "INSERT INTO memory_facts (fact_text, category, tenant_id, source_type, content_hash) "
+            "VALUES (%s, 'preference', %s, 'consolidation', md5(%s)) RETURNING id",
+            (text, TENANT, text),
+        )
+    )
+    world.db.q(
+        "UPDATE memory_facts SET is_active = FALSE, superseded_by = %s WHERE id = ANY(%s)",
+        (new, members),
+    )
+    return new
+
+
+def test_a_consolidation_of_one_owners_facts_moves_and_a_mixed_one_is_reported(
+    world: World,
+) -> None:
+    from robothor.memory.conversation_backfill import rescope_conversation_facts
+
+    store_chat(world.db, "telegram:4242", [("user", "hi")], person=ALICE)
+    a = _old_fact(world, "Reader Person prefers dark roast.", "telegram:4242")
+    b = _old_fact(world, "Reader Person drinks it black.", "telegram:4242")
+    c = _old_fact(world, "Reader Person grinds beans daily.", "telegram:4242")
+    note = int(
+        world.db.one(
+            "INSERT INTO memory_facts (fact_text, category, tenant_id, source_type, "
+            "content_hash) VALUES ('The team likes coffee.', 'preference', %s, 'note', "
+            "md5('team')) RETURNING id",
+            (TENANT,),
+        )
+    )
+    first = _consolidated(world, "Reader Person takes dark roast, black.", [a, b])
+    later = _consolidated(world, "Reader Person takes dark roast, black, daily.", [first])
+    mixed = _consolidated(world, "Coffee matters to the team and the reader.", [c, note])
+
+    dry = rescope_conversation_facts(TENANT)
+    assert dry["consolidated_rescoped"] == 1 and dry["consolidated_left_shared"] == 1
+
+    rescope_conversation_facts(TENANT, apply=True)
+    assert _scope(world, later) == ("user", ALICE_P)  # followed through the chain
+    assert _scope(world, mixed) == ("shared", None)  # it also holds a shared note
