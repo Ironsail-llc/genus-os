@@ -78,7 +78,9 @@ class TestFactSlot:
 class TestCompareSlots:
     def test_a_reversed_preference_is_a_change(self):
         assert (
-            compare_slots(_slot("Bob prefers coffee over tea."), _slot("Bob prefers tea over coffee."))
+            compare_slots(
+                _slot("Bob prefers coffee over tea."), _slot("Bob prefers tea over coffee.")
+            )
             == "change"
         )
 
@@ -88,19 +90,21 @@ class TestCompareSlots:
         )
 
     def test_the_same_value_is_a_repeat(self):
-        assert compare_slots(_slot("Alice lives in Boston."), _slot("Alice now lives in Boston.")) == (
-            "repeat"
-        )
+        assert compare_slots(
+            _slot("Alice lives in Boston."), _slot("Alice now lives in Boston.")
+        ) == ("repeat")
         # More detail about the same value is still the same value.
         assert (
-            compare_slots(_slot("Alice lives in Boston, Massachusetts."), _slot("Alice lives in Boston."))
+            compare_slots(
+                _slot("Alice lives in Boston, Massachusetts."), _slot("Alice lives in Boston.")
+            )
             == "repeat"
         )
 
     def test_a_multi_valued_attribute_gains_a_value(self):
-        assert compare_slots(_slot("Alice has visited Rome."), _slot("Alice has visited Paris.")) == (
-            "coexist"
-        )
+        assert compare_slots(
+            _slot("Alice has visited Rome."), _slot("Alice has visited Paris.")
+        ) == ("coexist")
         assert compare_slots(_slot("Bob likes hiking."), _slot("Bob likes jazz.")) == "coexist"
 
     def test_another_subject_is_unrelated(self):
@@ -109,9 +113,9 @@ class TestCompareSlots:
         )
 
     def test_another_attribute_is_unrelated(self):
-        assert compare_slots(_slot("Alice works at Acme Corp."), _slot("Alice lives in Boston.")) == (
-            "unrelated"
-        )
+        assert compare_slots(
+            _slot("Alice works at Acme Corp."), _slot("Alice lives in Boston.")
+        ) == ("unrelated")
 
     def test_a_shared_entity_is_the_same_subject_under_another_name(self):
         new = _slot("Alice moved to Denver.").with_entity_ids({12})

@@ -15,8 +15,9 @@ import asyncio
 import json
 import logging
 import re
+from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from psycopg2.extras import RealDictCursor
 
@@ -33,6 +34,9 @@ from robothor.memory.confirmed import is_operator_confirmed
 from robothor.memory.drift import compute_fact_hash
 from robothor.memory.facts import _write_dedup_enabled, store_fact
 from robothor.memory.vector_tuning import apply_hnsw_session
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +76,279 @@ def numbers_differ(a: str, b: str) -> bool:
         return sorted(out)
 
     return _nums(a) != _nums(b)
+
+
+# ── Same-slot detection ─────────────────────────────────────────────────────
+# A slot is (subject, attribute). Two facts in one slot either repeat its value,
+# change it (a single-valued attribute), or add a value (a multi-valued one).
+# Similarity cannot tell these apart, so the slot is read from the fact's
+# canonical predicate when it has one and otherwise from a small lexical frame.
+# A fact matching no frame has no slot and keeps the similarity path.
+
+#: Attributes a subject has one value of at a time. Every other attribute the
+#: frames name is multi-valued: a new value is one more, not a replacement.
+SINGLE_VALUED_ATTRIBUTES = frozenset(
+    {
+        "residence",
+        "employer",
+        "manager",
+        "role",
+        "title",
+        "spouse",
+        "partner",
+        "car",
+        "phone",
+        "email",
+        "address",
+        "birthday",
+        "age",
+        "timezone",
+    }
+)
+
+#: Canonical predicates (``write_path.normalize_predicate`` of a relation
+#: phrase) and the attribute each fills.
+PREDICATE_ATTRIBUTES: dict[str, str] = {
+    "lives_in": "residence",
+    "moved_to": "residence",
+    "relocated_to": "residence",
+    "resides_in": "residence",
+    "based_in": "residence",
+    "works_at": "employer",
+    "works_for": "employer",
+    "employed_by": "employer",
+    "married_to": "spouse",
+    "managed_by": "manager",
+    "reports_to": "manager",
+    "drives": "car",
+    "likes": "likes",
+    "enjoys": "likes",
+    "loves": "likes",
+    "owns": "owns",
+    "visited": "visited",
+    "uses": "uses",
+    "speaks": "speaks",
+    "plays": "plays",
+}
+
+_ADV = r"(?:(?:now|currently|recently|just|also|still|actually|finally)\s+)*"
+_ART = r"(?:(?:a|an|the|her|his|their|its)\s+)?"
+_SUBJ = r"(?P<subj>[^,;:]+?)"
+
+#: (attribute, pattern). Patterns run on the whole fact text, case-insensitive;
+#: ``subj`` and ``val`` are required groups, ``attr`` names the attribute for
+#: the possessive frames and ``other`` the second option of a preference.
+_FRAMES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (attr, re.compile(rx, re.IGNORECASE))
+    for attr, rx in (
+        (
+            "prefers",
+            rf"^{_SUBJ}\s+{_ADV}prefers?\s+(?P<val>.+?)\s+(?:over|to|rather than|instead of)\s+"
+            r"(?P<other>.+)$",
+        ),
+        (
+            "favorite",
+            rf"^{_SUBJ}'s\s+(?:new\s+)?favou?rite\s+(?P<attr>\w+)\s+is\s+{_ADV}(?P<val>.+)$",
+        ),
+        (
+            "possessive",
+            rf"^{_SUBJ}'s\s+(?P<attr>manager|boss|role|job title|title|spouse|husband|wife|"
+            r"partner|phone number|phone|email address|email|address|birthday|age|time zone|"
+            rf"timezone)\s+is\s+{_ADV}(?P<val>.+)$",
+        ),
+        (
+            "residence",
+            rf"^{_SUBJ}\s+{_ADV}(?:lives|is living|resides|is based|has moved|moved|"
+            rf"has relocated|relocated)\s+(?:back\s+)?(?:from\s+.+?\s+)?(?:in|to|at)\s+(?P<val>.+)$",
+        ),
+        (
+            "employer",
+            rf"^{_SUBJ}\s+{_ADV}(?:works|is working|started working|is employed)\s+(?:at|for|by)\s+"
+            r"(?P<val>.+)$",
+        ),
+        ("spouse", rf"^{_SUBJ}\s+is\s+{_ADV}married\s+to\s+(?P<val>.+)$"),
+        ("car", rf"^{_SUBJ}\s+{_ADV}drives\s+{_ART}(?P<val>.+)$"),
+        (
+            "visited",
+            rf"^{_SUBJ}\s+{_ADV}(?:has visited|visited|has been to|has travell?ed to)\s+(?P<val>.+)$",
+        ),
+        ("likes", rf"^{_SUBJ}\s+{_ADV}(?:likes|enjoys|loves)\s+(?P<val>.+)$"),
+        ("owns", rf"^{_SUBJ}\s+{_ADV}owns\s+{_ART}(?P<val>.+)$"),
+        ("uses", rf"^{_SUBJ}\s+{_ADV}uses\s+{_ART}(?P<val>.+)$"),
+        ("speaks", rf"^{_SUBJ}\s+{_ADV}speaks\s+(?P<val>.+)$"),
+        ("plays", rf"^{_SUBJ}\s+{_ADV}plays\s+{_ART}(?P<val>.+)$"),
+    )
+)
+
+_POSSESSIVE_ATTRIBUTES = {
+    "boss": "manager",
+    "job title": "title",
+    "husband": "spouse",
+    "wife": "spouse",
+    "phone number": "phone",
+    "email address": "email",
+    "time zone": "timezone",
+}
+
+# Where a value stops: punctuation, or a clause about time or cause.
+_VALUE_END = re.compile(
+    r"\s*(?:[,;!?]|\.(?:\s|$)|\s(?:since|last|this|next|because|as of|after|before|recently|"
+    r"yesterday|today|ago|when|while|as a|as an|in \d{4}|in (?:january|february|march|april|"
+    r"may|june|july|august|september|october|november|december|spring|summer|autumn|fall|"
+    r"winter))\b)",
+    re.IGNORECASE,
+)
+_LEADING_ARTICLE = re.compile(r"^(?:a|an|the)\s+", re.IGNORECASE)
+_VALUE_STOPWORDS = frozenset({"a", "an", "the", "in", "at", "of", "to", "for", "and", "now"})
+_MAX_SUBJECT_WORDS = 5
+
+
+def _norm_value(raw: str) -> str:
+    text = _VALUE_END.split(raw.strip(), maxsplit=1)[0]
+    text = _LEADING_ARTICLE.sub("", text.strip().rstrip(".")).strip()
+    return re.sub(r"\s+", " ", text.lower())
+
+
+def _norm_subject(raw: str) -> str | None:
+    text = re.sub(r"\s+", " ", raw.strip().lower())
+    text = _LEADING_ARTICLE.sub("", text)
+    if not text or len(text.split()) > _MAX_SUBJECT_WORDS:
+        return None
+    return text
+
+
+@dataclass(frozen=True)
+class FactSlot:
+    """One fact's (subject, attribute) and the value it gives that slot.
+
+    ``subject_keys`` holds ``name:<lowercased subject>`` and, when known,
+    ``entity:<id>`` for every entity the subject resolves to; two facts share a
+    subject when their keys intersect.
+    """
+
+    subject_keys: frozenset[str]
+    attribute: str
+    value: str
+
+    @property
+    def single_valued(self) -> bool:
+        base = self.attribute.split(":", 1)[0]
+        return base in SINGLE_VALUED_ATTRIBUTES or base in ("prefers", "favorite")
+
+    def with_entity_ids(self, ids: Iterable[int]) -> FactSlot:
+        keys = self.subject_keys | {f"entity:{int(i)}" for i in ids}
+        return FactSlot(frozenset(keys), self.attribute, self.value)
+
+    @property
+    def subject_name(self) -> str:
+        return next(
+            (k.split(":", 1)[1] for k in sorted(self.subject_keys) if k.startswith("name:")), ""
+        )
+
+
+def _subject_keys(subject: str, mention_entities: Iterable[Mapping[str, Any]]) -> frozenset[str]:
+    keys = {f"name:{subject}"}
+    for m in mention_entities:
+        surface = str(m.get("surface_form") or "").strip().lower()
+        eid = m.get("entity_id")
+        if eid is not None and surface and surface == subject:
+            keys.add(f"entity:{int(eid)}")
+    return frozenset(keys)
+
+
+def _slot_from_relations(
+    relations: Iterable[Mapping[str, Any]], mention_entities: list[Mapping[str, Any]]
+) -> FactSlot | None:
+    from robothor.memory.write_path import normalize_predicate
+
+    for rel in relations:
+        attribute = PREDICATE_ATTRIBUTES.get(normalize_predicate(rel.get("relation")) or "")
+        subject = _norm_subject(str(rel.get("source") or ""))
+        value = _norm_value(str(rel.get("target") or ""))
+        if attribute and subject and value:
+            return FactSlot(_subject_keys(subject, mention_entities), attribute, value)
+    return None
+
+
+def fact_slot(fact: Mapping[str, Any]) -> FactSlot | None:
+    """The slot ``fact`` fills, or None when no predicate or frame names one.
+
+    A relation whose canonical predicate is in :data:`PREDICATE_ATTRIBUTES`
+    decides first; otherwise the first frame matching ``fact_text``.
+    ``mention_entities`` (``[{surface_form, entity_id}]``, a stored fact's
+    resolved mentions) adds entity keys to the subject.
+    """
+    mention_entities = list(fact.get("mention_entities") or [])
+    slot = _slot_from_relations(fact.get("relations") or [], mention_entities)
+    if slot is not None:
+        return slot
+    text = str(fact.get("fact_text") or "").strip()
+    for attribute, pattern in _FRAMES:
+        m = pattern.match(text)
+        if not m:
+            continue
+        subject = _norm_subject(m.group("subj"))
+        value = _norm_value(m.group("val"))
+        if not subject or not value:
+            continue
+        groups = m.groupdict()
+        if attribute == "prefers":
+            other = _norm_value(groups.get("other") or "")
+            if not other:
+                continue
+            attribute = "prefers:" + "|".join(sorted((value, other)))
+        elif attribute == "favorite":
+            attribute = f"favorite:{str(groups['attr']).lower()}"
+        elif attribute == "possessive":
+            raw = str(groups["attr"]).lower()
+            attribute = _POSSESSIVE_ATTRIBUTES.get(raw, raw)
+        return FactSlot(_subject_keys(subject, mention_entities), attribute, value)
+    return None
+
+
+def _value_tokens(value: str) -> frozenset[str]:
+    return frozenset(re.findall(r"[a-z0-9]+", value.lower())) - _VALUE_STOPWORDS
+
+
+def compare_slots(new: FactSlot | None, old: FactSlot | None) -> str:
+    """How ``new`` relates to ``old``: ``repeat``, ``change``, ``coexist`` or ``unrelated``.
+
+    Same subject and attribute, and one value's words contain the other's:
+    ``repeat``. A different value: ``change`` for a single-valued attribute,
+    ``coexist`` for a multi-valued one. Anything else: ``unrelated``.
+    """
+    if new is None or old is None:
+        return "unrelated"
+    if new.attribute != old.attribute or not (new.subject_keys & old.subject_keys):
+        return "unrelated"
+    a, b = _value_tokens(new.value), _value_tokens(old.value)
+    if a and b and (a <= b or b <= a):
+        return "repeat"
+    return "change" if new.single_valued else "coexist"
+
+
+_SENTENCE_STARTERS = frozenset(
+    {"the", "a", "an", "this", "that", "it", "he", "she", "they", "we", "i", "on", "in", "at"}
+)
+
+
+def _names(text: str) -> frozenset[str]:
+    words = re.findall(r"\b[A-Z][\w'-]*", text or "")
+    return frozenset(w.lower() for w in words if w.lower() not in _SENTENCE_STARTERS)
+
+
+def values_differ(a: str, b: str) -> bool:
+    """True when two near-identical texts carry different values.
+
+    The reinforce shortcut treats a high-similarity pair as the same fact said
+    again; that holds only when the values are the same. Different numbers,
+    different names, or the same words in another order ("tea over coffee",
+    "coffee over tea") are a different value.
+    """
+    if numbers_differ(a, b) or _names(a) != _names(b):
+        return True
+    wa, wb = re.findall(r"\w+", (a or "").lower()), re.findall(r"\w+", (b or "").lower())
+    return sorted(wa) == sorted(wb) and wa != wb
 
 
 # JSON schema for conflict classification structured output.
