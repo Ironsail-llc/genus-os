@@ -91,9 +91,8 @@ async def _write(text: str, *, tenant: str = TENANT, **kw: Any) -> dict[str, Any
         )
     )
     assert parsed, text
-    return await resolve_and_store(
-        parsed[0], "src", "conversation", tenant_id=tenant, embedding=_vec(next(_counter)), **kw
-    )
+    kw.setdefault("embedding", _vec(next(_counter)))
+    return await resolve_and_store(parsed[0], "src", "conversation", tenant_id=tenant, **kw)
 
 
 def _rows(tenant: str = TENANT) -> dict[int, dict[str, Any]]:
@@ -156,9 +155,10 @@ class TestChangeEndToEnd:
         assert rows[out["new_id"]]["is_active"] is True
 
     async def test_a_true_repeat_reinforces_and_stores_nothing(self, tenants):
-        first = await _write("Alice lives in Boston.")
+        # The same statement again embeds the same: one shared vector.
+        first = await _write("Alice lives in Boston.", embedding=_vec(900))
         before = len(_rows())
-        out = await _write("Alice now lives in Boston.")
+        out = await _write("Alice now lives in Boston.", embedding=_vec(900))
         assert out["action"] == "reinforced"
         rows = _rows()
         assert len(rows) == before

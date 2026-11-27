@@ -676,7 +676,9 @@ async def _resolve_slot(
     fact's own tenant and scope. Returns None when none shares the slot, and
     the caller carries on by similarity.
 
-    * repeat (same value): the existing fact is reinforced, nothing stored.
+    * repeat (same value): at cosine 0.92 or more in the same category the
+      existing fact is reinforced and nothing stored; below that the caller's
+      similarity path decides, as before.
     * coexist (a multi-valued attribute): the new fact is stored beside it.
     * change (a single-valued attribute): the new fact is stored and every
       active value of the slot is closed (``superseded_by``, ``valid_to``,
@@ -693,7 +695,9 @@ async def _resolve_slot(
     new_slot = slot.with_entity_ids(entity_ids)
     candidates: dict[int, dict[str, Any]] = {int(r["id"]): r for r in similar}
     for r in rows:
-        candidates[int(r["id"])] = {**candidates.get(int(r["id"]), {}), **r}
+        near = candidates.get(int(r["id"]), {})
+        # The lookup's row adds resolved mentions; the similarity is the search's.
+        candidates[int(r["id"])] = {**near, **r, "similarity": near.get("similarity")}
     matches = [(r, compare_slots(new_slot, fact_slot(r))) for r in candidates.values()]
     matches = [(r, kind) for r, kind in matches if kind != "unrelated"]
     if not matches:
@@ -714,6 +718,15 @@ async def _resolve_slot(
     where = f"same slot ({new_slot.subject_name}, {new_slot.attribute})"
     repeat = next((r for r, kind in matches if kind == "repeat"), None)
     if repeat is not None:
+        # The same value. Reinforced only as the similarity rule would (0.92,
+        # same category): a restatement in other words, perhaps from a more
+        # trusted source, is the classifier's to judge, not swallowed here.
+        if not (
+            _write_dedup_enabled()
+            and float(repeat.get("similarity") or 0) >= _REINFORCE_THRESHOLD
+            and (repeat.get("category") or "") == (fact.get("category") or "")
+        ):
+            return None
         await asyncio.to_thread(_reinforce_fact, repeat["id"], tenant_id=tenant_id)
         await _record(
             repeat,

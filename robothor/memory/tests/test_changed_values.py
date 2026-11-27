@@ -255,8 +255,8 @@ class TestStoreTimeChange:
 
     @pytest.mark.asyncio
     async def test_a_true_repeat_is_reinforced(self, monkeypatch):
-        old = _row(7, "Alice lives in Boston.", similarity=0.6)
-        s = _Store(monkeypatch, slot_rows=[old])
+        old = _row(7, "Alice lives in Boston.", similarity=0.95)
+        s = _Store(monkeypatch, similar=[old], slot_rows=[_row(7, "Alice lives in Boston.")])
         out = await s("Alice now lives in Boston.")
         assert out["action"] == "reinforced"
         assert out["existing_id"] == 7
