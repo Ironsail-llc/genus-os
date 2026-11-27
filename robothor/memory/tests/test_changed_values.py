@@ -59,12 +59,25 @@ class TestFactSlot:
         assert _slot("The Helios launch went well.") is None
         assert _slot("") is None
 
-    def test_single_and_multi_valued(self):
-        assert _slot("Alice lives in Boston.").single_valued is True
-        assert _slot("Alice works for Acme Corp.").single_valued is True
-        assert _slot("Bob prefers tea over coffee.").single_valued is True
+    def test_single_several_and_multi_valued(self):
+        # Single: one value at a time. Several: people often have more than one
+        # (employers, phones, emails, addresses), so only the classifier may
+        # call a new one a replacement. Multi: a new value never replaces.
+        for text in (
+            "Alice lives in Boston.",
+            "Bob prefers tea over coffee.",
+            "Bob's manager is Carol.",
+        ):
+            assert _slot(text).cardinality == "single", text
+        for text in (
+            "Alice works for Acme Corp.",
+            "Alice's phone number is 555-0199.",
+            "Alice's email is alice@example.com.",
+            "Alice's address is 1 Main St.",
+        ):
+            assert _slot(text).cardinality == "several", text
         for text in ("Bob likes jazz.", "Alice owns a bike.", "Alice has visited Rome."):
-            assert _slot(text).single_valued is False, text
+            assert _slot(text).cardinality == "multi", text
 
     def test_a_mention_resolved_to_an_entity_keys_the_subject(self):
         slot = _slot(
@@ -125,9 +138,109 @@ class TestCompareSlots:
         )
         assert compare_slots(new, old) == "change"
 
+    def test_an_entity_resolved_subject_needs_the_same_entity(self):
+        # Two people named Alice in one scope never share a slot.
+        old = _slot(
+            "Alice lives in Boston.",
+            mention_entities=[{"surface_form": "Alice", "entity_id": 12}],
+        )
+        assert compare_slots(_slot("Alice moved to Denver.").with_entity_ids({13}), old) == (
+            "unrelated"
+        )
+        # Nor does an unresolved one borrow a resolved fact's slot by name.
+        assert compare_slots(_slot("Alice moved to Denver."), old) == "unrelated"
+        assert compare_slots(_slot("Alice moved to Denver.").with_entity_ids({12}), old) == (
+            "change"
+        )
+
     def test_a_missing_slot_is_unrelated(self):
         assert compare_slots(None, _slot("Alice lives in Boston.")) == "unrelated"
         assert compare_slots(_slot("Alice lives in Boston."), None) == "unrelated"
+
+
+class TestNoSlotForUnsafeSentences:
+    """A frame match may only ever nominate a pair, and these must not even do
+    that: hedged, negated, conditional, quoted, plural or questioned sentences,
+    pronoun or generic subjects, and values that are not of the attribute's
+    type. Each of these closed a true fact in the verifier's run."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Alice also works at Globex.",
+            "Alice also lives in Denver.",
+            "Alice's email is also alice@work.example.",
+            "Alice no longer lives in Boston.",
+            "Alice never lives in Denver.",
+            "Alice's manager is not Carol.",
+            "Alice moved to Denver last year but is back in Boston.",
+            "Alice lives in Denver if the deal closes.",
+            "If Alice moved to Denver she would save money.",
+            "Alice might move to Denver.",
+            "Alice lives in Denver?",
+            "Alice used to work at Globex.",
+            "Bob said Alice lives in Denver.",
+            'Alice said "I live in Denver".',
+            "Alice moved to Denver temporarily for a project.",
+            "She lives in Denver.",
+            "He works at Globex.",
+            "The user lives in Denver.",
+            "The company is based in Denver.",
+        ],
+    )
+    def test_a_hedged_or_unattributed_sentence_has_no_slot(self, text):
+        assert _slot(text) is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Alice moved to the sales team.",
+            "Alice moved in with Bob.",
+            "Alice lives in a house with two dogs.",
+            "Alice lives at 12 Main Street.",
+            "Alice lives in fear of layoffs.",
+            "Alice is based in the engineering org.",
+            "Alice recently moved to a new apartment.",
+            "Alice works at night.",
+            "Alice works at home on Fridays.",
+            "Alice works for free on weekends.",
+            "Alice works at the front desk.",
+            "Alice drives to work every day.",
+            "Alice drives the product roadmap.",
+            "Alice is married to her job.",
+            "Alice's manager is unhappy with the Q3 numbers.",
+            "Alice's manager is on vacation.",
+            "Alice's phone is broken.",
+            "Alice's address is unknown.",
+            "Alice's age is a sensitive topic.",
+            "Alice's role is to approve budgets.",
+            "Alice's birthday is next week.",
+        ],
+    )
+    def test_a_value_of_the_wrong_type_has_no_slot(self, text):
+        assert _slot(text) is None
+
+    @pytest.mark.parametrize(
+        ("text", "attribute", "value"),
+        [
+            ("Alice moved to Denver in 2019.", "residence", "denver"),
+            ("Alice has moved from Boston to Denver.", "residence", "denver"),
+            ("Alice lives in New York.", "residence", "new york"),
+            ("Alice works at Acme Labs.", "employer", "acme labs"),
+            ("Alice's phone number is 555-0199.", "phone", "555-0199"),
+            ("Alice's email is alice@work.example.", "email", "alice@work.example"),
+            ("Alice's birthday is March 3.", "birthday", "march 3"),
+            ("Alice's age is 30.", "age", "30"),
+            ("Alice's timezone is EST.", "timezone", "est"),
+            ("Alice's address is 1 Main St.", "address", "1 main st"),
+            ("Alice's title is CTO.", "title", "cto"),
+            ("Alice drives a Tesla.", "car", "tesla"),
+        ],
+    )
+    def test_a_plain_statement_of_a_typed_value_still_has_a_slot(self, text, attribute, value):
+        slot = _slot(text)
+        assert slot is not None, text
+        assert (slot.attribute, slot.value) == (attribute, value)
 
 
 class TestValuesDiffer:
