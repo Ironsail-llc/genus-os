@@ -75,6 +75,7 @@ class _Handlers:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any], Any]] = []
         self.delay = 0.0
+        self.risky_result: Any = {"done": True}
 
     async def lookup(self, args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         self.calls.append(("acme_lookup", args, ctx))
@@ -91,6 +92,14 @@ class _Handlers:
     async def big_write(self, args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         self.calls.append(("acme_export", args, ctx))
         return {"exported": True, "blob": "x" * (rc.REMOTE_RESULT_MAX_BYTES + 10)}
+
+    async def risky(self, args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
+        """A write whose answer each test sets: a value, or an exception to raise."""
+        self.calls.append(("acme_risky", args, ctx))
+        outcome = self.risky_result
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return dict(outcome)
 
     async def slow(self, args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         self.calls.append(("acme_slow", args, ctx))
@@ -143,6 +152,7 @@ def _entry_points(handlers: _Handlers) -> list[_EP]:
             "acme_update": handlers.update,
             "acme_big": handlers.big,
             "acme_export": handlers.big_write,
+            "acme_risky": handlers.risky,
             "acme_slow": handlers.slow,
             "acme_fails": handlers.fails,
             "acme_plain": handlers.plain,
@@ -153,6 +163,7 @@ def _entry_points(handlers: _Handlers) -> list[_EP]:
             "acme_update": {"access": "write", "attestations": ["baa"]},
             "acme_big": {"access": "read"},
             "acme_export": {"access": "write"},
+            "acme_risky": {"access": "write"},
             "acme_slow": {"access": "read"},
             "acme_fails": {"access": "read"},
         },
@@ -774,6 +785,7 @@ async def test_the_catalogue_lists_the_declared_tools_plugins_and_checks(world) 
         "acme_update",
         "acme_big",
         "acme_export",
+        "acme_risky",
         "acme_slow",
         "acme_fails",
     }
@@ -868,3 +880,97 @@ async def test_the_plugin_checks_run_inside_the_checks_budget(world, monkeypatch
 
     assert (await _request("GET", "/api/admin/remote-tools")).status_code == 200
     assert budgets == [rc.CHECKS_BUDGET_S]
+
+
+# ── a write whose outcome is unknown, and a write a control refused ─────────
+
+
+def _risky(**over: Any) -> dict[str, Any]:
+    return _write(tool="acme_risky", args={}, attestations=[], **over)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        # The tool says so itself, as the effect ledger reads it.
+        {"error": "the connection dropped after the request was sent", "outcome_unknown": True},
+        # No signal: an error from a write may have changed the remote system.
+        {"error": "upstream answered 500"},
+        # The tool raised: the dispatcher reports a crash.
+        ConnectionError("connection reset by peer"),
+    ],
+)
+async def test_a_write_whose_outcome_is_unknown_says_so_and_is_never_replayed(
+    world, outcome
+) -> None:
+    world.handlers.risky_result = outcome
+
+    first = await _call(**_risky())
+
+    assert first.status_code == 200, first.text
+    payload = first.json()
+    assert payload["outcome"] == rc.OUTCOME_ERROR
+    assert payload["outcome_unknown"] is True
+    assert payload["result"]["error"]
+    assert world.ledger.rows[(CHILD, "req-1")]["state"] == "running"
+    [row] = _audits(world)
+    assert row["details"]["outcome"] == rc.ERR_OUTCOME_UNKNOWN
+
+    world.handlers.risky_result = {"done": True}
+    again = await _call(**_risky())
+
+    _refusal(again, 409, rc.ERR_OUTCOME_UNKNOWN)
+    assert [c[0] for c in world.handlers.calls] == ["acme_risky"]
+
+
+async def test_a_write_the_tool_refused_by_its_own_control_is_released(world) -> None:
+    from robothor.engine.refusal import refusal
+
+    world.handlers.risky_result = refusal(
+        "writes are stopped", gate="flag", name="ACME_KILL", unlock="clear the kill file"
+    )
+
+    first = await _call(**_risky())
+
+    assert first.status_code == 200, first.text
+    assert first.json()["outcome"] == rc.OUTCOME_ERROR
+    assert "outcome_unknown" not in first.json()
+    assert (CHILD, "req-1") not in world.ledger.rows
+
+    world.handlers.risky_result = {"done": True}
+    again = await _call(**_risky())
+
+    assert again.json()["outcome"] == rc.OUTCOME_OK
+    assert [c[0] for c in world.handlers.calls] == ["acme_risky", "acme_risky"]
+
+
+async def test_a_successful_write_is_still_stored_and_replayed(world) -> None:
+    await _call(**_risky())
+    again = await _call(**_risky())
+
+    assert again.json()["outcome"] == rc.OUTCOME_REPLAYED
+    assert [c[0] for c in world.handlers.calls] == ["acme_risky"]
+
+
+# ── the catalogue's detail scrubber ──────────────────────────────────────────
+
+
+def test_check_details_keep_a_urls_host_and_drop_its_credentials_and_query() -> None:
+    from robothor.engine.remote_tools import _clean
+
+    text = _clean(
+        "token from https://svc-user:hunter2@api.example.com:8443/v1/token?key=abc123 "
+        "kept at /srv/acme/conf.yaml"
+    )
+
+    assert "https://api.example.com:8443/v1/token" in text
+    assert "hunter2" not in text and "svc-user" not in text
+    assert "abc123" not in text and "key=" not in text
+    assert "/srv/acme" not in text and "<path>" in text
+    assert "http:/<path>" not in text
+
+
+def test_check_details_scrub_a_windows_path() -> None:
+    from robothor.engine.remote_tools import _clean
+
+    assert "acme" not in _clean(r"config at C:\Users\acme\conf.yaml")

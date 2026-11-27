@@ -462,6 +462,47 @@ def test_a_write_whose_outcome_the_target_cannot_tell_is_outcome_unknown(env):
     assert result["outcome_unknown"] is True
 
 
+def _unknown_answer() -> tuple[int, dict[str, Any]]:
+    return (
+        200,
+        {
+            "outcome": "error",
+            "request_id": "eff-1",
+            "tool": "example_write",
+            "result": {"error": "the connection dropped after the request was sent"},
+            "would": None,
+            "outcome_unknown": True,
+        },
+    )
+
+
+def test_a_write_the_child_cannot_account_for_says_it_may_have_changed(env):
+    env.bridge.answer = _unknown_answer()
+
+    result = _call("org_tool_write", _write())
+
+    assert result["outcome_unknown"] is True
+    assert result["retryable"] is False
+    assert result["error_code"] == ERR_OUTCOME_UNKNOWN
+    assert "may or may not" in result["error"]
+    assert "connection dropped" in result["error"]
+    (row,) = _rows(env)
+    assert row["outcome"] not in ("denied", "ok")
+
+
+def test_an_unknown_write_is_fenced_in_the_effect_ledger(env, ledger):
+    env.bridge.answer = _unknown_answer()
+
+    with (
+        patch("robothor.engine.runtime.effect_results.record", return_value=True) as record,
+        patch("robothor.engine.runtime.effects.finish", return_value=True) as finish,
+    ):
+        _call("org_tool_write", _write())
+
+    record.assert_not_called()
+    assert finish.call_args.kwargs["uncertain"] is True
+
+
 def test_a_write_that_timed_out_on_the_way_is_outcome_unknown(env):
     env.bridge.raise_exc = httpx.ReadTimeout("slow")
 
