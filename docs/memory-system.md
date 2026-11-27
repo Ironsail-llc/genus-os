@@ -1222,10 +1222,12 @@ longer than one run's five windows, so it drains without waiting for the next
 message. At most 20 follow-ups follow one exchange. Follow-ups live in the
 process: one lost to a restart strands nothing, because the watermark never
 passed the turns it was for, and the conversation's next run takes them. A
-writer that stays open longer than the hold is covered too: each run reads this
-conversation's rows below the watermark written in the last 15 minutes that are
-not among the recently extracted ids, and extracts them once (they are never
-skipped, and stop being looked for as they age).
+writer that stays open longer than the hold is covered too: the watermark row
+remembers the last 400 message ids extracted and, as a floor, each watermark it
+left. A row above that floor and at or below the watermark that is not
+remembered is late: each run extracts up to 40 of them, once. A late turn the
+model answers unusably is recorded as a skipped window at once. With nothing
+remembered nothing is late, and ids too large for the list are never late.
 
 **History before this release.** A conversation the previous ingest had seen
 (its row under the conversation's tenant, or under the default tenant, where
@@ -1269,8 +1271,10 @@ A fact is external, too, when its quote lies inside a span relaying someone
 else's words: a quoted line (`>`), a block of two or more email header lines
 (From:, To:, Cc:, Subject:, Sent:, Date:), a forwarded or original-message
 separator, or what follows a line introducing a paste ("here's an email I
-got:", "my wife wrote:", not "I said:"). A fact without a quote, or one the
-turn does not contain, in a turn that has such a span is external. The user's
+got:", "my wife wrote:", not "I said:"). In a turn that has such a span, a
+fact is external whenever its quote is missing, is not in the turn, overlaps a
+span at all (a quote straddling its edge included), or occurs more than once
+with any occurrence touching a span. The user's
 own words beside the span stay theirs; a code fence is not a marker. Not
 caught: a paste with no marker, and a model citing a user turn for a claim that
 turn does not make.
@@ -1282,7 +1286,9 @@ within three days of the model's (`robothor/memory/relative_dates.py`). A
 week apart is a different reading (a speaker correcting themselves, "last
 Tuesday" meant as the week before) and is left alone. It never fills an empty
 event time, never replaces a date the cited turn writes out itself
-(2026-11-22, November 22), and never rewrites one in the fact text. "Last
+(2026-11-22, November 22), never uses a phrase from another statement than
+the fact's own quoted words (statements end at sentence punctuation, a comma,
+"and" or "but"), and never rewrites a stated date in the fact text. "Last
 <weekday>" is the most recent such day before the turn's. Named:
 yesterday, today, tomorrow, the day before or after, N days or weeks ago, last
 <weekday>, and "in N days or weeks" only when the clause points forward ("I'm
@@ -1334,9 +1340,12 @@ batches (`--batch`, `--restart`). Copies that meet in one scope with the same
 text keep the oldest. Each moved fact leaves the shared graph as a private
 write never enters it: its evidence rows go and its relations are kept on it
 (`metadata.graph_pending_relations`), an edge left with no evidence is deleted,
-and a node nothing shared names any more (not CRM-linked, no contact
-identifier, no shared mention, no edge) is removed with its private mentions
-and decisions. Nothing runs it automatically.
+and a node nothing else names (not CRM-linked, no contact identifier, no edge,
+no mention from any other fact of any owner, no active shared fact naming it in
+its `entities` column) is removed with these facts' mentions of it and its
+decisions. Nodes kept because another fact still names them are counted
+(`nodes_kept_by_other_facts`, `nodes_kept_by_entities`). Nothing runs it
+automatically.
 
 **Cost.** Counted from the prompts (input tokens at four characters a token,
 user turns of about 200 characters and assistant turns of about 600): before,
