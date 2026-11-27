@@ -23,7 +23,7 @@ name: WildClawBench Agent
 description: Plain Genus agent used to measure the harness against WildClawBench.
 
 model:
-  primary: openrouter/xiaomi/mimo-v2.5-pro
+  primary: openrouter/xiaomi/mimo-v2.6-pro
   fallbacks: []
 
 schedule:

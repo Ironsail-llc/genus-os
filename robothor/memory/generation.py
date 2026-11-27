@@ -286,6 +286,7 @@ def _provider() -> str:
 # confirmed gone appears below; a live slug is never rewritten.
 RETIRED_MODEL_SUCCESSORS = {
     "xiaomi/mimo-v2.5": "xiaomi/mimo-v2.6-flash",  # retired 2026-11 (404 "model not found")
+    "xiaomi/mimo-v2.5-pro": "xiaomi/mimo-v2.6-pro",  # same retirement
 }
 
 

@@ -671,6 +671,7 @@ class TestFallbackStreakEscalation:
             r for r in caplog.records if generation.FALLBACK_STREAK_MARKER in r.getMessage()
         ]
 
+
 def test_retired_model_slug_resolves_to_successor(monkeypatch):
     """A slug OpenRouter retired must not reach the wire.
 
@@ -686,3 +687,7 @@ def test_live_model_slug_is_never_rewritten(monkeypatch):
     monkeypatch.setenv(generation.REMOTE_MODEL_ENV, "openrouter/xiaomi/mimo-v2.6-pro")
     assert generation._remote_model() == "xiaomi/mimo-v2.6-pro"
 
+
+def test_retired_pro_slug_resolves_to_successor(monkeypatch):
+    monkeypatch.setenv(generation.REMOTE_MODEL_ENV, "openrouter/xiaomi/mimo-v2.5-pro")
+    assert generation._remote_model() == "xiaomi/mimo-v2.6-pro"

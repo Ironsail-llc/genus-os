@@ -1434,7 +1434,7 @@ async def _score_task_detailed(
     if judge:
         rubric = judge.get("rubric", [])
         threshold = float(judge.get("threshold", 0.7))
-        model = judge.get("model", "openrouter/xiaomi/mimo-v2.5-pro")
+        model = judge.get("model", "openrouter/xiaomi/mimo-v2.6-pro")
         outcome = await _judge_output(output, rubric, model)
         judge_error = outcome.error
         detail["judge"] = {

@@ -250,7 +250,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         # so the entry exists only to keep sizing and pricing honest while
         # the warning points at the replacement.
         status="deprecated",
-        replaced_by="openrouter/xiaomi/mimo-v2.5-pro",
+        replaced_by="openrouter/xiaomi/mimo-v2.6-pro",
     ),
     # MiMo-V2.5 via OpenRouter — fleet-wide primary (2026-07-07)
     "openrouter/xiaomi/mimo-v2.5": ModelLimits(

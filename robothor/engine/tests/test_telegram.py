@@ -413,7 +413,7 @@ class TestModelPickerRegistry:
     def test_fleet_primary_in_picker(self):
         from robothor.engine.telegram import AVAILABLE_MODELS
 
-        assert "openrouter/xiaomi/mimo-v2.5" in AVAILABLE_MODELS.values()
+        assert "openrouter/xiaomi/mimo-v2.6-flash" in AVAILABLE_MODELS.values()
 
     def test_qwen_removed_from_picker(self):
         from robothor.engine.telegram import AVAILABLE_MODELS

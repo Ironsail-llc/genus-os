@@ -112,8 +112,8 @@ AVAILABLE_MODELS: dict[str, str] = {
     # --- current ---
     "DeepSeek V4.1 Flash": "openrouter/deepseek/deepseek-v4.1-flash",
     "GLM 5.3 Flash": "openrouter/z-ai/glm-5.3-flash",
-    "MiMo V2.5": "openrouter/xiaomi/mimo-v2.5",
-    "MiMo V2.5 Pro": "openrouter/xiaomi/mimo-v2.5-pro",
+    "MiMo V2.6 Flash": "openrouter/xiaomi/mimo-v2.6-flash",
+    "MiMo V2.6 Pro": "openrouter/xiaomi/mimo-v2.6-pro",
     "DeepSeek V4 Pro": "openrouter/deepseek/deepseek-v4-pro",
     "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4.6",
     "Claude Opus 4.7": "openrouter/anthropic/claude-opus-4.7",
