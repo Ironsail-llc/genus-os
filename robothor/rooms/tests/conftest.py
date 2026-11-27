@@ -105,5 +105,7 @@ def rooms_db(monkeypatch) -> Iterator[SimpleNamespace]:
                     f"DELETE FROM {table} WHERE tenant_id = ANY(%s)",  # noqa: S608
                     (list(tenants),),
                 )
+        # Conversation ingest keeps a watermark row per conversation.
+        cur.execute("DELETE FROM ingested_items WHERE tenant_id = ANY(%s)", (list(tenants),))
         cur.execute("DELETE FROM crm_tenants WHERE id = ANY(%s)", (list(tenants),))
         conn.close()
