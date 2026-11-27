@@ -383,3 +383,75 @@ async def test_a_briefing_is_extracted_by_default(monkeypatch: Any) -> None:
     store, model = _briefing_store(), Model()
     await _run(store, model)
     assert "Morning Briefing" in model.prompts[0]
+
+
+# ═══ a conversation's facts are as private as the conversation ══════════
+
+ALICE = "6f1c1b7e-0000-4000-8000-000000000001"
+
+
+@pytest.mark.asyncio
+async def test_a_persons_conversation_gives_facts_private_to_that_person() -> None:
+    store = Store(_stored(4), scope=("user", f"person:{ALICE}"))
+    _, write = await _run(store, Model())
+    assert _written(write)
+    for ctx, _f in _written(write):
+        assert (ctx.scope_kind, ctx.scope_id) == ("user", f"person:{ALICE}")
+
+
+@pytest.mark.asyncio
+async def test_facts_about_the_speaker_are_anchored_to_their_person() -> None:
+    store = Store(_stored(4), scope=("user", f"person:{ALICE}"))
+    _, write = await _run(store, Model())
+    for _ctx, f in _written(write):
+        anchors = [m for m in f["mentions"] if m.get("crm_person_id")]
+        if "number 1 " in f["fact_text"]:  # a user turn: about the user
+            assert anchors == [
+                {"surface_form": "the user", "entity_type": "person", "crm_person_id": ALICE}
+            ]
+            assert f["metadata"]["subject"] == {"kind": "person", "person_id": ALICE}
+        else:  # the assistant's turn is not about the user
+            assert anchors == []
+            assert "subject" not in f["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_a_members_conversation_is_private_to_the_member_with_a_placeholder() -> None:
+    store = Store(_stored(2), scope=("user", "user:member-1"))
+    _, write = await _run(store, Model(), key="agent:main:user:member-1")
+    (ctx, about), _other = _written(write)
+    assert (ctx.scope_kind, ctx.scope_id) == ("user", "user:member-1")
+    assert not any(m.get("crm_person_id") for m in about["mentions"])
+    subject = about["metadata"]["subject"]
+    assert subject["kind"] == "conversation_participant"
+    assert subject["owner"] == "user:member-1"
+    assert subject["conversation_ref"] == "agent:main:user:member-1"
+    assert "participant" in subject["label"].lower()
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_with_no_known_owner_is_kept_but_readable_by_no_one() -> None:
+    from robothor.memory.visibility import reader_scope_ids
+
+    store = Store(_stored(2), scope=("user", None))
+    _, write = await _run(store, Model())
+    written = _written(write)
+    assert len(written) == 2  # not dropped
+    for ctx, _f in written:
+        assert ctx.scope_kind == "user"
+        assert ctx.scope_id == f"conversation:{KEY}"
+        # No reader's ids can ever equal it.
+        assert ctx.scope_id not in reader_scope_ids(person_id=ALICE, user_id="member-1")
+        assert not ctx.scope_id.startswith(("person:", "user:", "agent:"))
+    about = next(f for _c, f in written if "number 1 " in f["fact_text"])
+    assert about["metadata"]["subject"]["kind"] == "conversation_participant"
+
+
+@pytest.mark.asyncio
+async def test_a_workspace_room_is_not_extracted_into_tenant_wide_facts() -> None:
+    store = Store(_stored(4), scope=("shared", None))
+    model = Model()
+    out, write = await _run(store, model, key="agent:main:room:3f2a")
+    assert model.prompts == []
+    write.assert_not_awaited()
+    assert out is None

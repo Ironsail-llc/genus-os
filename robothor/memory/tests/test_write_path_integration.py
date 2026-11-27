@@ -541,8 +541,10 @@ async def test_an_assistant_turn_paraphrasing_external_content_is_agent_generate
     await ingest_conversation_session(KEY, history, "main", "webchat", "run-1", TENANT)
     (row,) = world.db.facts()
     assert row["origin"] == Origin.AGENT_GENERATED
-    (edge,) = world.db.edges()
-    assert edge["origin"] == Origin.AGENT_GENERATED
+    # The member's conversation is private, so the edge waits on the fact.
+    assert (row["scope_kind"], row["scope_id"]) == ("user", "user:member-1")
+    assert world.db.edges() == []
+    assert row["metadata"]["graph_pending_relations"]
 
 
 @pytest.mark.asyncio
@@ -569,8 +571,59 @@ async def test_user_turns_of_a_conversation_are_user_stated(world: World) -> Non
         "Project Atlas launches in June.": Origin.AGENT_GENERATED,
     }
     assert world.model.calls.count("extract_conversation") == 1
-    (edge,) = world.db.edges()
-    assert edge["origin"] == Origin.USER_STATED
+    assert world.db.edges() == []  # private facts write no edge
+
+
+# ═══ what a person says about themselves is a fact about them ════════════
+
+
+@pytest.mark.asyncio
+async def test_a_stated_preference_with_no_named_entity_is_a_fact_about_that_person(
+    world: World,
+) -> None:
+    """Given a user turn stating a preference with no named entity, when the
+    conversation is ingested, then a fact about that person exists, linked to the turn."""
+    from robothor.memory.conversation_ingest import ingest_conversation_session
+    from robothor.memory.visibility import fact_visibility_sql
+
+    world.model.on_turn(
+        "dark roast",
+        turn_fact("The user prefers dark roast coffee.", category="preference",
+                  kind="preference", about_user=True),
+    )  # fmt: skip
+    turns = [
+        ("user", "I always go for dark roast."),
+        ("assistant", "Noted, dark roast it is."),
+    ]
+    key = "agent:main:telegram:4242"
+    ids = store_chat(world.db, key, turns, person=ALICE)
+    history = [{"role": r, "content": c} for r, c in turns]
+    await ingest_conversation_session(key, history, "main", "telegram", "run-1", TENANT)
+
+    rows = [f for f in world.db.facts() if f["fact_text"] == "The user prefers dark roast coffee."]
+    assert len(rows) == 1  # the assistant's echo of it is the same fact, written once
+    (row,) = rows
+    assert row["origin"] == Origin.USER_STATED
+    assert (row["scope_kind"], row["scope_id"], row["person_id"]) == ("user", ALICE_P, ALICE)
+    source = row["metadata"]["source"]
+    assert source["ref"] == key and ids[0] in source["turn_refs"]
+    # Anchored to the person's own node, through the CRM.
+    anchored = [m for m in world.db.mentions(row["id"]) if m[2] is not None]
+    assert anchored
+    crm = world.db.one("SELECT crm_person_id::text FROM memory_entities WHERE id = %s",
+                       (anchored[0][2],))  # fmt: skip
+    assert crm == ALICE
+    # Alice reads it; a reader with no ids, or another person, does not.
+    for readers, seen in (([ALICE_P], 1), ([], 0), ([BOB_P], 0)):
+        pred, params = fact_visibility_sql(readers)
+        n = world.db.one(
+            f"SELECT count(*) FROM memory_facts WHERE id = %s AND {pred}", (row["id"], *params)
+        )
+        assert n == seen
+    # Ingesting again extracts nothing more.
+    calls = world.model.calls.count("extract_conversation")
+    await ingest_conversation_session(key, history, "main", "telegram", "run-2", TENANT)
+    assert world.model.calls.count("extract_conversation") == calls
 
 
 # ═══ acceptance (iv): extraction failure stores the raw content ══════════

@@ -657,3 +657,37 @@ def test_an_email_mention_reaches_identity_as_a_strong_key() -> None:
     email, project = _mention_inputs(None, fact, ctx)
     assert dict(email.strong_keys) == {"email": "alice.moreno@example.com"}
     assert dict(project.strong_keys) == {}
+
+
+# ═══ an identity anchor only ever names the scope's own person ═══════════
+
+
+@pytest.mark.parametrize(
+    ("scope", "anchor", "kept"),
+    [
+        (("user", ALICE_P), ALICE, True),
+        (("user", ALICE_P), BOB, False),  # someone else's person: ignored
+        (("shared", None), ALICE, False),  # a shared write never anchors
+        (("user", "user:member-1"), ALICE, False),  # no person owns the scope
+    ],
+)
+def test_a_mention_anchor_is_kept_only_for_the_scopes_person(
+    scope: tuple[str, str | None], anchor: str, kept: bool
+) -> None:
+    from robothor.memory.write_path import WriteContext, _mention_inputs
+
+    ctx = WriteContext.for_source(
+        tenant_id="test-tenant",
+        source_channel="webchat",
+        content_type="conversation",
+        role="user",
+        scope=scope,
+    )
+    fact = {
+        "fact_text": "The user prefers dark roast coffee.",
+        "mentions": [
+            {"surface_form": "the user", "entity_type": "person", "crm_person_id": anchor}
+        ],
+    }
+    (mention,) = _mention_inputs(None, fact, ctx)
+    assert (mention.strong_keys.get("crm_person_id") == anchor) is kept
