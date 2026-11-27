@@ -64,11 +64,16 @@ class _Engine:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
         self.answers: dict[str, tuple[int, Any]] = {}
+        self.hang: set[str] = set()  # tenants whose engine never answers
 
     async def __call__(self, method, path, *, json=None, timeout=30.0, tenant=None):
         self.calls.append(
             {"method": method, "path": path, "json": json, "timeout": timeout, "tenant": tenant}
         )
+        if tenant in self.hang:
+            import asyncio
+
+            await asyncio.sleep(30)
         if tenant in self.answers:
             return self.answers[tenant]
         if path == "/api/admin/remote-tools":
@@ -591,3 +596,30 @@ def test_connections_when_off_ask_no_engine(engine, monkeypatch):
     assert body["mode"] == "off"
     assert engine.calls == []
     assert all(t["status"] == "error" for t in body["tenants"])
+
+
+def test_connections_ask_each_engine_with_a_short_timeout(engine):
+    _person().get(CONNECTIONS)
+
+    from routers.org_remote import CONNECTIONS_TIMEOUT_S
+
+    assert CONNECTIONS_TIMEOUT_S == 10
+    assert {c["timeout"] for c in engine.calls} == {CONNECTIONS_TIMEOUT_S}
+
+
+def test_a_slow_company_does_not_hold_the_page(engine, monkeypatch):
+    import time
+
+    monkeypatch.setattr("routers.org_remote.CONNECTIONS_TIMEOUT_S", 0.2)
+    engine.hang.add(CHILD_B)
+
+    started = time.monotonic()
+    response = _person().get(CONNECTIONS)
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 200
+    assert elapsed < 5
+    by_id = {t["tenant_id"]: t for t in response.json()["tenants"]}
+    assert by_id[CHILD_A]["status"] == "ok"
+    assert by_id[CHILD_B]["status"] == "error"
+    assert ROOT not in by_id
