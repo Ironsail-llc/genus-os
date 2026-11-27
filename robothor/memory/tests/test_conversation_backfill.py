@@ -94,9 +94,9 @@ def test_it_resumes_in_batches_and_a_second_run_finds_nothing(world: World) -> N
     from robothor.memory.conversation_backfill import rescope_conversation_facts
 
     _seed(world)
-    first = rescope_conversation_facts(TENANT, apply=True, batch=1)
+    first = rescope_conversation_facts(TENANT, apply=True, batch=1, max_batches=1)
     assert first["rescoped"] == 1 and first["more"] is True
-    second = rescope_conversation_facts(TENANT, apply=True, batch=1)
+    second = rescope_conversation_facts(TENANT, apply=True, batch=1, max_batches=1)
     assert second["rescoped"] == 1
     third = rescope_conversation_facts(TENANT, apply=True)
     assert third["rescoped"] == 0
@@ -260,3 +260,38 @@ async def test_a_node_anything_else_still_names_is_kept_and_reported(world: Worl
         (wp.BOB_P,),
     )
     assert bob and all(r[1] is not None for r in bob)  # the other person's mention stays
+
+
+# ═══ one command does the whole job ══════════════════════════════════════
+
+
+def test_one_apply_works_through_every_batch(world: World) -> None:
+    from robothor.memory.conversation_backfill import rescope_conversation_facts
+
+    _seed(world)
+    report = rescope_conversation_facts(TENANT, apply=True, batch=1)
+    assert report["rescoped"] == 2 and report["more"] is False
+    assert report["batches"] >= 5  # one fact a batch, five facts examined
+    assert rescope_conversation_facts(TENANT, apply=True)["examined"] == 0
+
+
+def test_a_dry_run_reports_every_batch_and_can_be_repeated(world: World) -> None:
+    from robothor.memory.conversation_backfill import rescope_conversation_facts
+
+    ids = _seed(world)
+    for _ in range(2):  # nothing it does survives, cursor included
+        report = rescope_conversation_facts(TENANT, batch=1)
+        assert report["would_rescope"] == 2 and report["examined"] == 5
+        assert report["left_shared"] == {"no_owner": 1, "room": 1, "no_session": 1}
+    assert all(_scope(world, i) == ("shared", None) for i in ids.values())
+
+
+def test_the_command_runs_to_the_end(world: World, capsys: Any) -> None:
+    import json as _json
+
+    from robothor.memory.conversation_backfill import main
+
+    _seed(world)
+    assert main(["--tenant", TENANT, "--apply", "--batch", "1"]) == 0
+    report = _json.loads(capsys.readouterr().out)
+    assert report["rescoped"] == 2 and report["more"] is False
