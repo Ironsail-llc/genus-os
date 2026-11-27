@@ -108,7 +108,7 @@ SINGLE_VALUED_ATTRIBUTES = frozenset(
 )
 #: People often have several (two employers, a work and a home email): a new
 #: value MAY be a change, and only the classifier says so.
-SEVERAL_VALUED_ATTRIBUTES = frozenset({"employer", "phone", "email", "address"})
+SEVERAL_VALUED_ATTRIBUTES = frozenset({"employer", "phone", "email", "address", "base"})
 #: A new value is one more, never a replacement.
 MULTI_VALUED_ATTRIBUTES = frozenset({"visited", "likes", "owns", "uses", "speaks", "plays"})
 
@@ -119,7 +119,8 @@ PREDICATE_ATTRIBUTES: dict[str, str] = {
     "moved_to": "residence",
     "relocated_to": "residence",
     "resides_in": "residence",
-    "based_in": "residence",
+    # Where someone works from is not where they live.
+    "based_in": "base",
     "works_at": "employer",
     "works_for": "employer",
     "employed_by": "employer",
@@ -164,9 +165,10 @@ _FRAMES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ),
         (
             "residence",
-            rf"^{_SUBJ}\s+{_ADV}(?:lives|is living|resides|is based|has moved|moved|"
+            rf"^{_SUBJ}\s+{_ADV}(?:lives|is living|resides|has moved|moved|"
             rf"has relocated|relocated)\s+(?:back\s+)?(?:from\s+.+?\s+)?(?:in|to)\s+(?P<val>.+)$",
         ),
+        ("base", rf"^{_SUBJ}\s+(?:is\s+)?{_ADV}based\s+in\s+(?P<val>.+)$"),
         (
             "employer",
             rf"^{_SUBJ}\s+{_ADV}(?:works|is working|started working|is employed)\s+(?:at|for|by)\s+"
@@ -241,7 +243,18 @@ _TYPED_VALUES: dict[str, re.Pattern[str]] = {
 }
 #: Values that must be a name: capitalised words, a few connectors inside.
 _NAMED_VALUES = frozenset(
-    {"residence", "employer", "manager", "role", "title", "spouse", "partner", "car", "visited"}
+    {
+        "residence",
+        "base",
+        "employer",
+        "manager",
+        "role",
+        "title",
+        "spouse",
+        "partner",
+        "car",
+        "visited",
+    }
 )
 _MAX_VALUE_WORDS = 5
 
@@ -617,7 +630,8 @@ _SLOT_SQL = """
 
 #: Words (``to_tsquery`` terms, stemmed by it) a fact naming each attribute uses.
 _ATTRIBUTE_TERMS: dict[str, str] = {
-    "residence": "live | lives | moved | move | resides | relocated | based",
+    "residence": "live | lives | moved | move | resides | relocated",
+    "base": "based",
     "employer": "works | working | employed",
     "manager": "manager | boss",
     "role": "role",

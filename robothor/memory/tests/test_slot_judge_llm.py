@@ -38,15 +38,29 @@ CASES = [
 
 @pytest.mark.timeout(600)
 async def test_no_compatible_pair_is_judged_changed() -> None:
-    from robothor.memory.conflicts import judge_slot_change, replacement_wording, slot_action
+    from robothor.memory.conflicts import (
+        compare_slots,
+        fact_slot,
+        judge_slot_change,
+        replacement_wording,
+        slot_action,
+    )
 
     table: Counter[tuple[str, str, str]] = Counter()
     wrong: list[tuple[str, str, str]] = []
-    for old, new, attribute, several, new_event, label in CASES:
+    for old, new, _attribute, _several, new_event, label in CASES:
+        # As the product does: the judge is asked only about two values of
+        # one slot; any other pair is never compared, so nothing can close.
+        new_slot, old_slot = fact_slot({"fact_text": new}), fact_slot({"fact_text": old})
+        if compare_slots(new_slot, old_slot) != "change" or new_slot is None:
+            table[(label, "not asked", "keep")] += 1
+            print(f"{label:6} {'not asked':11} {'keep':10} | {old} -> {new}")
+            continue
+        several = new_slot.cardinality == "several"
         verdict = await judge_slot_change(
             new,
             old,
-            attribute=attribute,
+            attribute=new_slot.attribute,
             several=several,
             new_event=new_event,
             old_event=None,
@@ -59,7 +73,7 @@ async def test_no_compatible_pair_is_judged_changed() -> None:
         # What the product does with the answer: only "close" ends a fact.
         action = slot_action(
             outcome,
-            "several" if several else "single",
+            new_slot.cardinality,
             replacement_wording=replacement_wording(new),
             order="earlier" if new_event else "later",
         )
