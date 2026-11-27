@@ -93,12 +93,12 @@ class Store:
         self.failed_end = None
         self.recorded.append((str(through), list(fact_ids)))
 
-    def fail(self, session_key: str, tenant_id: str, token: str, end: int) -> int:
-        if self.failed_end is None:
-            self.failed_end = end
+    def fail(self, session_key: str, tenant_id: str, token: str, end: int, points: int) -> int:
         self._seen()
         assert token == self.claimed_by
-        self.failures += 1
+        if self.failed_end is None:
+            self.failed_end = end
+        self.failures += points
         return self.failures
 
     def renew(self, session_key: str, tenant_id: str, token: str) -> bool:
@@ -661,7 +661,7 @@ async def test_a_window_that_keeps_failing_is_skipped_counted_and_logged(caplog:
     for _ in range(ci.MAX_WINDOW_FAILURES - 1):
         out, _ = await _run(store, model)
         assert out is None and store.watermark == 0
-    assert store.failures == ci.MAX_WINDOW_FAILURES - 1  # one per failed run
+    assert store.failures == ci.ANSWERED_POINTS * (ci.MAX_WINDOW_FAILURES - 1)  # per run
     store.turns += [_turn(3, "user", "turn number 3"), _turn(4, "assistant", "turn number 4")]
     with caplog.at_level("WARNING"):
         out, write = await _run(store, model)
@@ -730,9 +730,7 @@ class DownModel(Model):
         return await super().generate(prompt, **kw)
 
 
-@pytest.mark.parametrize(
-    "exc", [ConnectionError("unreachable"), TimeoutError(), RuntimeError("503 from server")]
-)
+@pytest.mark.parametrize("exc", [ConnectionError("unreachable"), RuntimeError("503 from server")])
 @pytest.mark.asyncio
 async def test_a_model_outage_never_counts_toward_skipping(exc: Exception) -> None:
     store = Store(_stored(2), scope=("user", f"person:{ALICE}"))
@@ -750,7 +748,7 @@ async def test_a_model_outage_never_counts_toward_skipping(exc: Exception) -> No
 async def test_only_an_answer_the_model_gave_counts_toward_skipping() -> None:
     store = Store(_stored(2), scope=("user", f"person:{ALICE}"))
     await _run(store, Model(fail=True))  # it answered, but not in the shape asked for
-    assert store.failures == 1
+    assert store.failures == ci.ANSWERED_POINTS
 
 
 # ═══ the lease is renewed while a run works, and handed off cleanly ══════
@@ -807,3 +805,35 @@ async def test_a_late_turn_that_keeps_failing_ends_as_a_recorded_skip() -> None:
     await _run(store, PoisonModel())
     assert store.skipped == [(2, 2)]
     assert 2 in store.covered and store.late == []  # recorded, never looked for again
+
+
+# ═══ an answer cut short, an empty one, or a window that always times out ═
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RuntimeError("truncated response from remote model m: finish_reason=length"),
+        RuntimeError("empty content from remote model m"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_truncated_or_empty_answer_counts_as_answered(exc: Exception) -> None:
+    store = Store(_stored(2), scope=("user", f"person:{ALICE}"))
+    model = DownModel(exc)
+    for _ in range(ci.MAX_WINDOW_FAILURES):
+        await _run(store, model)
+    assert store.skipped == [(1, 2)]
+
+
+@pytest.mark.parametrize("exc", [TimeoutError(), TimeoutError("read timed out")])
+@pytest.mark.asyncio
+async def test_a_window_that_always_times_out_is_skipped_later(exc: Exception) -> None:
+    store = Store(_stored(2), scope=("user", f"person:{ALICE}"))
+    model = DownModel(exc)
+    for _ in range(ci.MAX_WINDOW_FAILURES):
+        await _run(store, model)
+    assert store.skipped == []  # three timeouts are not yet a stuck window
+    for _ in range(ci.MAX_WINDOW_FAILURES):
+        await _run(store, model)
+    assert store.skipped == [(1, 2)]  # twice as many are
