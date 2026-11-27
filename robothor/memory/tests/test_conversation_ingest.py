@@ -679,3 +679,44 @@ async def test_turns_written_moments_ago_are_held_back_for_a_follow_up() -> None
 )
 def test_what_is_held_back(rows: list[tuple[int, str, bool]], expected: int | None) -> None:
     assert ci.held_from(rows) == expected
+
+
+# ═══ an outage of the model server never skips real turns ═══════════════
+
+
+class DownModel(Model):
+    """The model server is unreachable, times out, or errors."""
+
+    def __init__(self, exc: Exception) -> None:
+        super().__init__()
+        self.exc = exc
+        self.down = True
+
+    async def generate(self, prompt: str, **kw: Any) -> str:
+        if self.down:
+            self.prompts.append(prompt)
+            raise self.exc
+        return await super().generate(prompt, **kw)
+
+
+@pytest.mark.parametrize(
+    "exc", [ConnectionError("unreachable"), TimeoutError(), RuntimeError("503 from server")]
+)
+@pytest.mark.asyncio
+async def test_a_model_outage_never_counts_toward_skipping(exc: Exception) -> None:
+    store = Store(_stored(2), scope=("user", f"person:{ALICE}"))
+    model = DownModel(exc)
+    for _ in range(ci.MAX_WINDOW_FAILURES + 2):
+        out, _ = await _run(store, model)
+        assert out is None
+    assert store.failures == 0 and store.skipped == [] and store.watermark == 0
+    model.down = False
+    out, write = await _run(store, model)
+    assert store.watermark == 2 and _written(write)
+
+
+@pytest.mark.asyncio
+async def test_only_an_answer_the_model_gave_counts_toward_skipping() -> None:
+    store = Store(_stored(2), scope=("user", f"person:{ALICE}"))
+    await _run(store, Model(fail=True))  # it answered, but not in the shape asked for
+    assert store.failures == 1
