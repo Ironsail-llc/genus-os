@@ -27,6 +27,11 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 | `ingestion_watermarks` | Per-source progress and error tracking |
 
 All embedding columns are `vector(1024)` with HNSW indexes (m=16, ef_construction=200).
+The embedding client (`robothor/llm/ollama.py`) checks every vector it receives
+against that width: an empty or mis-sized vector is retried once, then raises
+`InvalidEmbeddingError`, naming the model and both widths, before any SQL runs.
+It is an `httpx.HTTPError`, so search degrades to keyword-only on it exactly as it
+does when the embedding service is unreachable, and a write fails without storing.
 Active-row **partial** HNSW indexes (`idx_*_active`, migrations 073/074) keep
 superseded vectors out of the candidate budget. Every pooled connection gets
 an **iterative index scan** at checkout (`hnsw.iterative_scan=relaxed_order`,
