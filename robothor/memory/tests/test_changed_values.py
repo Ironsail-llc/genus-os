@@ -265,6 +265,17 @@ class TestStoreTimeChange:
         s.supersede.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_a_restatement_below_the_reinforce_threshold_is_not_swallowed(self, monkeypatch):
+        # Same value, said differently (and perhaps by a more trusted source):
+        # the slot does not reinforce it away; the similarity rules decide.
+        old = _row(7, "Alice lives in Boston.", origin="external")
+        s = _Store(monkeypatch, slot_rows=[old])
+        out = await s("Alice now lives in Boston.", origin="crm")
+        assert out["action"] == "stored"
+        assert s.reinforced == []
+        s.supersede.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_a_multi_valued_attribute_keeps_both(self, monkeypatch):
         old = _row(7, "Alice has visited Paris.", similarity=0.95)
         s = _Store(monkeypatch, similar=[old], slot_rows=[old])
