@@ -46,6 +46,7 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT, platform_timezone
 from robothor.db.connection import get_connection
+from robothor.engine.chat_store import CHAT_TURN_TTL_DAYS
 from robothor.engine.sanitize import sanitize_log
 from robothor.memory.conversation_facts import (
     ConversationTurn,
@@ -991,20 +992,26 @@ def _mutate(
     with get_connection() as conn:
         cur = conn.cursor()
         # A new row starts where the old (pre-watermark) path left the
-        # conversation: what it had ingested is not extracted a second time.
+        # conversation, and in any case past every turn older than the chat
+        # retention: such a turn is still stored only because an old fact
+        # quotes it, so it was extracted before. History is never redone.
         cur.execute(
+            "WITH m AS (SELECT m.id, m.created_at FROM chat_messages m "
+            "JOIN chat_sessions s ON s.id = m.session_id "
+            "WHERE s.tenant_id = %s AND s.session_key = %s) "
             "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, "
-            "fact_ids, ingested_at) SELECT %s, %s, %s, COALESCE(("
-            "SELECT max(m.id) FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id "
-            "WHERE s.tenant_id = %s AND s.session_key = %s AND m.created_at <= ("
+            "fact_ids, ingested_at) SELECT %s, %s, %s, GREATEST("
+            "COALESCE((SELECT max(m.id) FROM m WHERE m.created_at <= ("
             "SELECT max(o.ingested_at) FROM ingested_items o WHERE o.tenant_id IN (%s, %s) "
-            "AND o.item_id = %s AND o.source_name = ANY(%s))), 0)::text || '|0|||', '{}', NOW() "
+            "AND o.item_id = %s AND o.source_name = ANY(%s))), 0), "
+            "COALESCE((SELECT max(m.id) FROM m WHERE m.created_at < "
+            "now() - make_interval(days => %s)), 0))::text || '|0|||', '{}', NOW() "
             "ON CONFLICT (tenant_id, source_name, item_id) DO NOTHING",
             (
                 tenant_id,
-                _WATERMARK_SOURCE,
                 session_key,
                 tenant_id,
+                _WATERMARK_SOURCE,
                 session_key,
                 tenant_id,
                 # The previous ingest wrote its tail-hash row without a tenant,
@@ -1012,6 +1019,7 @@ def _mutate(
                 DEFAULT_TENANT,
                 session_key,
                 list(_OLD_PATH_SOURCES),
+                CHAT_TURN_TTL_DAYS,
             ),
         )
         cur.execute(

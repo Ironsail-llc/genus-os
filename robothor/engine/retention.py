@@ -60,7 +60,16 @@ RETENTION_POLICY: OrderedDict[str, dict[str, Any]] = OrderedDict(
         ),
         (
             "ingested_items",
-            {"days": 90, "timestamp_col": "ingested_at", "batch_size": 5000},
+            {
+                "days": 90,
+                "timestamp_col": "ingested_at",
+                "batch_size": 5000,
+                # Conversation memory's per-conversation state (watermark,
+                # skipped windows, backfill cursor) is not history: losing it
+                # would re-extract a conversation from its first turn.
+                "extra_where": "source_name NOT IN ('conversation_facts', "
+                "'conversation_facts_skipped', 'conversation_facts_backfill')",
+            },
         ),
         (
             "federation_events",

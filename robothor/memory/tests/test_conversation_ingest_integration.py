@@ -148,7 +148,9 @@ def test_turns_are_read_in_the_instances_timezone(world: World, monkeypatch: Any
     from robothor.memory import conversation_ingest as ci
 
     monkeypatch.setattr(ci, "platform_timezone", lambda: "America/New_York")
-    ids = store_chat(world.db, "telegram:4242", [("user", "hi")], person=ALICE)
+    ids = store_chat(
+        world.db, "telegram:4242", [("user", "hi")], person=ALICE, at="2023-05-20T09:00:00Z"
+    )
     conv = ci._load_conversation("telegram:4242", TENANT, 0, 10)
     assert conv is not None
     (turn,) = conv.turns
@@ -343,7 +345,8 @@ async def test_a_conversation_the_old_path_ingested_starts_at_its_end(world: Wor
     store_chat(world.db, key, turns, person=ALICE)
     world.db.q(
         "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, ingested_at) "
-        "VALUES (%s, 'conversation_session', %s, 'old-hash', '2023-05-20T09:01:30Z')",
+        "VALUES (%s, 'conversation_session', %s, 'old-hash', "
+        "now() - interval '1 hour' + interval '90 seconds')",
         (TENANT, key),
     )
     await _ingest(key, turns)
@@ -379,7 +382,7 @@ async def test_the_old_paths_row_under_the_default_tenant_counts_too(world: Worl
     store_chat(world.db, key, turns, person=ALICE)
     world.db.q(
         "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, ingested_at) "
-        "VALUES (%s, 'conversation_session', %s, 'old-hash', '2023-05-20T10:00:00Z')",
+        "VALUES (%s, 'conversation_session', %s, 'old-hash', now())",
         (DEFAULT_TENANT, key),
     )
     await _ingest(key, turns)

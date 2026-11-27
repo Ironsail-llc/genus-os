@@ -255,11 +255,14 @@ def store_chat(
     *,
     person: str | None = None,
     tenant: str = TENANT,
+    at: str | None = None,
 ) -> list[int]:
     """A stored conversation, as chat_store writes it; returns the message ids.
 
     Each turn is ``(role, content)`` or ``(role, content, extras)``, the extras
-    merged into the stored message as chat_store merges them.
+    merged into the stored message as chat_store merges them. Turns are a
+    minute apart from ``at`` (an ISO time), by default an hour ago: recent
+    enough to be within the chat retention, old enough to be past the hold.
     """
     sid = db.one(
         "INSERT INTO chat_sessions (tenant_id, session_key, channel, person_id) "
@@ -270,9 +273,9 @@ def store_chat(
     return [
         int(db.one(
             "INSERT INTO chat_messages (session_id, message, created_at) "
-            "VALUES (%s, %s::jsonb, '2023-05-20T09:00:00Z'::timestamptz + %s * interval '1 minute') "
-            "RETURNING id",
-            (sid, json.dumps({"role": t[0], "content": t[1], **(t[2] if len(t) > 2 else {})}), i),
+            "VALUES (%s, %s::jsonb, COALESCE(%s::timestamptz, now() - interval '1 hour') "
+            "+ %s * interval '1 minute') RETURNING id",
+            (sid, json.dumps({"role": t[0], "content": t[1], **(t[2] if len(t) > 2 else {})}), at, i),
         ))
         for i, t in enumerate(turns)
     ]  # fmt: skip

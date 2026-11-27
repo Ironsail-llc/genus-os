@@ -1232,8 +1232,11 @@ remembered nothing is late, and ids too large for the list are never late.
 
 **History before this release.** A conversation the previous ingest had seen
 (its row under the conversation's tenant, or under the default tenant, where
-it wrote them) starts past the last message it had seen, so its history is not
-extracted again into private copies. The facts that ingest wrote stay as they are,
+it wrote them) starts past the last message it had seen, and every conversation
+starts past turns older than the 90-day chat retention (they are still stored
+only because an old fact quotes them), so history is not extracted again into
+private copies. The daily retention sweep leaves this feature's rows in
+`ingested_items` alone, so a conversation idle for months keeps its watermark. The facts that ingest wrote stay as they are,
 `shared`, until the operator runs the backfill below.
 
 **What the model is shown and asked.** Each turn starts at the margin as
