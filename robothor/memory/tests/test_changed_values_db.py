@@ -625,3 +625,20 @@ class TestRecallContract:
         rows = await self._search(monkeypatch, 650, "Alice")
         assert new["new_id"] in [r["id"] for r in rows]
         assert old["new_id"] not in [r["id"] for r in rows]
+
+
+class TestManyWriters:
+    async def test_five_values_at_once_end_with_one_current_or_recorded_conflicts(self, tenants):
+        import asyncio
+
+        await _write("Alice lives in Boston.")
+        await asyncio.gather(
+            *[_write(f"Alice lives in Town{c}.", names=["Alice"]) for c in "ABCDE"]
+        )
+        active = _active("Alice lives")
+        if len(active) > 1:
+            unresolved = {
+                d["new_fact_id"] for d in _decisions() if d["action"] == "conflict_unresolved"
+            }
+            assert set(active) - unresolved <= {max(active)}, (active, unresolved)
+        assert len(active) >= 1

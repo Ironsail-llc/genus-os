@@ -458,6 +458,21 @@ def test_a_replaced_value_can_still_be_forgotten_once(
     assert again.status_code == 409
 
 
+def test_the_preview_lists_a_replaced_value_it_would_forget(
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn
+):
+    platform, _ = tenants
+    current = make_fact("Alice moved to Denver", tenant=platform)
+    earlier = make_fact("Alice lives in Boston", tenant=platform, active=False)
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE memory_facts SET superseded_by = %s WHERE id = %s", (current, earlier))
+    db_conn.commit()
+    body = controls_client_as_operator.post(f"{FACTS}/{earlier}/forget/preview").json()
+    assert body["would_deactivate"] == [earlier]
+    assert body["already_inactive"] is False
+    assert body["replaced"] is True
+
+
 def test_forgetting_another_tenants_fact_is_404_and_changes_nothing(
     controls_client_as_operator, live_db, make_fact, tenants, db_conn
 ):
