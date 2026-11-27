@@ -6,7 +6,9 @@
  * saying so, and clicks a company to switch into it: the page reloads onto
  * that company under the "Acting as" banner. A child-tenant admin, whose
  * listing holds only its own tenant, gets no command centre at all. At phone
- * width the cards stack and nothing scrolls sideways.
+ * width the cards stack and nothing scrolls sideways. Each child company's card
+ * carries a Connected block (its plugins, their checks and its remote tools);
+ * against a bridge without that route the cards read exactly as before.
  *
  * Nothing here may reach a real bridge or engine.
  */
@@ -91,11 +93,47 @@ const OVERVIEW = {
   ],
 };
 
+const CONNECTIONS = {
+  as_of: "2026-11-18T12:00:00+00:00",
+  home_tenant_id: "acme-parent",
+  mode: "read",
+  tenants: [
+    {
+      tenant_id: "acme-child-a",
+      display_name: "Acme Child A",
+      status: "ok",
+      error: null,
+      plugins: [{ name: "example-plugin", version: "1.2.3", enabled: true }],
+      tools: [
+        { name: "example_read", plugin: "example-plugin", access: "read", attestations: [], description: "Reads." },
+        { name: "example_write", plugin: "example-plugin", access: "write", attestations: [], description: "Writes." },
+      ],
+      checks: [
+        { name: "example-plugin.connection", status: "ok", detail: "" },
+        { name: "example-plugin.token", status: "fail", detail: "expired" },
+      ],
+    },
+    {
+      tenant_id: "acme-child-b",
+      display_name: "Acme Child B",
+      status: "error",
+      error: "the company's engine did not answer",
+      plugins: [],
+      tools: [],
+      checks: [],
+    },
+  ],
+};
+
 function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }
 
-async function setupMocks(page: Page, identity: { home: string; accessible: Tenant[] }) {
+async function setupMocks(
+  page: Page,
+  identity: { home: string; accessible: Tenant[] },
+  options: { connections?: boolean } = {},
+) {
   const state = { acting: identity.home, switches: [] as string[], overviewReads: 0 };
 
   await page.route("**/api/auth/session", (route) =>
@@ -138,6 +176,10 @@ async function setupMocks(page: Page, identity: { home: string; accessible: Tena
       ? json(route, OVERVIEW)
       : json(route, { detail: "switch back to your home tenant to see every company" }, 403);
   });
+  // An older bridge has no connections route: it answers 404.
+  await page.route("**/api/bridge/api/org/connections", (route) =>
+    options.connections === false ? json(route, { detail: "Not Found" }, 404) : json(route, CONNECTIONS),
+  );
   await page.route("**/api/session/switch-tenant", (route) => {
     const { tenant } = route.request().postDataJSON() as { tenant: string };
     if (!identity.accessible.some((t) => t.id === tenant)) {
@@ -175,6 +217,20 @@ test.describe("command centre", () => {
     await expect(page.getByTestId("company-card-acme-child-b").getByTestId("runs-24h")).toHaveCount(0);
     await expect(page.getByTestId("org-as-of")).toBeVisible();
 
+    // What each child company has connected, and the page's remote-tools mode.
+    const connected = childA.getByTestId("connected");
+    await expect(connected.getByRole("heading", { name: "Connected" })).toBeVisible();
+    await expect(connected.getByTestId("connected-plugins")).toContainText("example-plugin");
+    await expect(connected.getByTestId("connected-plugins")).toContainText("1.2.3");
+    await expect(connected.getByTestId("connected-checks")).toContainText("1 fail");
+    await expect(connected.getByTestId("connected-failing")).toContainText("example-plugin.token");
+    await expect(connected.getByTestId("connected-tools")).toContainText("1 read");
+    await expect(connected.getByTestId("connected-tools")).toContainText("1 write");
+    await expect(page.getByTestId("company-card-acme-child-b").getByTestId("connected-error")).toContainText(
+      "could not be read",
+    );
+    await expect(page.getByTestId("org-remote-mode")).toContainText("read only");
+
     await page.screenshot({ path: test.info().outputPath("command-centre.png"), fullPage: true });
 
     await page.getByRole("button", { name: "Open Acme Child A" }).click();
@@ -199,6 +255,18 @@ test.describe("command centre", () => {
     await expect.poll(() => state.overviewReads).toBe(2);
     await expect(refresh).toBeEnabled();
     expect(state.overviewReads).toBe(2);
+  });
+
+  test("against a bridge without the connections route, the cards read as before", async ({ page }) => {
+    await setupMocks(page, { home: "acme-parent", accessible: [PARENT, CHILD_A, CHILD_B] }, { connections: false });
+
+    await page.goto("/?v=org");
+
+    await expect(page.getByTestId(/^company-card-/)).toHaveCount(3);
+    await expect(page.getByTestId("company-card-acme-child-a")).toContainText("Renew the lease");
+    await expect(page.getByTestId("connected")).toHaveCount(0);
+    await expect(page.getByTestId("org-remote-mode")).toHaveCount(0);
+    await expect(page.getByTestId("org-error")).toHaveCount(0);
   });
 
   test("a child-tenant admin has no command centre", async ({ page }) => {
