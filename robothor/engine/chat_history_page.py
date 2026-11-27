@@ -29,6 +29,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+#: Fields a stored turn carries for conversation memory's attribution only
+#: (``chat_store.build_user_extras`` / ``with_sender``): never shown in history.
+_PRIVATE_FIELDS = frozenset({"sender_user_id", "sender_telegram_id"})
+
+
+def _shown(page: dict[str, Any]) -> dict[str, Any]:
+    messages = [
+        {k: v for k, v in m.items() if k not in _PRIVATE_FIELDS} if isinstance(m, dict) else m
+        for m in page.get("messages", [])
+    ]
+    return {**page, "messages": messages}
+
+
 def _whole(value: str | None) -> int | None:
     """A non-negative whole number from the query string, or ``None``."""
     return int(value) if value is not None and value.isdigit() else None
@@ -58,9 +71,9 @@ async def history_page(
         logger.warning("Chat history page unavailable for %s: %s", sanitize_log(session_key), e)
         page = None
     if page is not None:
-        return page
+        return _shown(page)
     tail = history[-limit:] if limit > 0 else history
-    return {"messages": [] if older else tail, "hasMore": False}
+    return _shown({"messages": [] if older else tail, "hasMore": False})
 
 
 async def history_response(
