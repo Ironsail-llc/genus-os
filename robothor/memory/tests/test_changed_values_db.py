@@ -522,3 +522,86 @@ class TestConcurrency:
         current = _active("Denver")
         assert len(current) == 1
         assert _rows()[current[0]]["metadata"]["supersedes"] == [first["new_id"]]
+
+
+class TestRecallContract:
+    """Earlier values are extra rows after selection: at most
+    ``bitemporal.MAX_EARLIER_ROWS``, never in place of a ranked row, and only
+    ever read through the reader's own filters."""
+
+    async def _search(self, monkeypatch, vector_of: int, query: str, **kw: Any):
+        import robothor.memory.facts as facts
+
+        async def _embed(_q: str) -> list[float]:
+            return _vec(vector_of)
+
+        monkeypatch.setattr(facts, "_embed_query", _embed)
+        return await facts.search_facts(
+            query, use_reranker=False, include_segments=False, tenant_id=TENANT, **kw
+        )
+
+    async def _six_moves(self) -> None:
+        for i in range(6):
+            await _write(f"Person{i} lives in Boston.", names=[f"Person{i}"], embedding=_vec(600))
+            await _write(
+                f"Person{i} moved to Denver.", names=[f"Person{i}"], embedding=_vec(610 + i)
+            )
+
+    async def test_the_limit_bounds_the_ranked_rows_and_earlier_rows_are_bounded_extras(
+        self, tenants, monkeypatch
+    ):
+        from robothor.memory.bitemporal import MAX_EARLIER_ROWS
+
+        await self._six_moves()
+        for limit in (1, 3, 6):
+            rows = await self._search(monkeypatch, 610, "Denver moved", limit=limit)
+            ranked = [r for r in rows if r.get("earlier_of") is None]
+            assert len(ranked) <= limit
+            assert len(rows) - len(ranked) <= MAX_EARLIER_ROWS
+            assert not ranked[0].get("superseded")
+
+    async def test_history_recall_keeps_the_same_contract(self, tenants, monkeypatch):
+        from robothor.memory.bitemporal import MAX_EARLIER_ROWS
+
+        await self._six_moves()
+        rows = await self._search(monkeypatch, 600, "Boston", limit=3, active_only=False)
+        ranked = [r for r in rows if r.get("earlier_of") is None]
+        assert len(ranked) <= 3
+        assert len(rows) <= 3 + MAX_EARLIER_ROWS
+        for i, r in enumerate(rows):
+            if r.get("earlier_of") is not None:
+                assert rows[i - 1]["id"] == r["earlier_of"]
+
+    async def test_a_private_change_is_read_by_its_reader_only(self, tenants, monkeypatch):
+        a = "person:11111111-1111-1111-1111-111111111111"
+        b = "person:22222222-2222-2222-2222-222222222222"
+        old = await _write("Alice lives in Boston.", scope_kind="user", scope_id=a)
+        new = await _write("Alice moved to Denver.", scope_kind="user", scope_id=a,
+                           embedding=_vec(640))  # fmt: skip
+        assert new["action"] == "superseded"
+        ids_a = [r["id"] for r in await self._search(monkeypatch, 640, "Alice", reader_scope_id=a)]
+        assert ids_a.index(new["new_id"]) + 1 == ids_a.index(old["new_id"])
+        for reader in (b, None):
+            rows = await self._search(monkeypatch, 640, "Alice", reader_scope_id=reader)
+            assert {old["new_id"], new["new_id"]}.isdisjoint(r["id"] for r in rows)
+        history = await self._search(
+            monkeypatch, 640, "Alice", reader_scope_id=b, active_only=False
+        )
+        assert {old["new_id"], new["new_id"]}.isdisjoint(r["id"] for r in history)
+
+    async def test_a_forgotten_earlier_value_is_not_shown(self, tenants, monkeypatch):
+        from robothor.db.connection import get_connection
+
+        old = await _write("Alice lives in Boston.")
+        new = await _write("Alice moved to Denver.", embedding=_vec(650))
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE memory_facts SET metadata = metadata || "
+                "jsonb_build_object('forgotten', jsonb_build_object('at', now())) WHERE id = %s",
+                (old["new_id"],),
+            )
+            conn.commit()
+        rows = await self._search(monkeypatch, 650, "Alice")
+        assert new["new_id"] in [r["id"] for r in rows]
+        assert old["new_id"] not in [r["id"] for r in rows]
