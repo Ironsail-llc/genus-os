@@ -27,11 +27,12 @@ What it does, per tenant, for each shared fact the old ingest wrote
   is removed with these facts' mentions of it and its decisions; nodes kept
   because another fact still names them are counted.
 
-Dry run by default: it does the work in one transaction and rolls it back, so
-its report (facts, duplicates, edges, nodes) is what applying would change.
-Applied, it works in batches by fact id and remembers where it stopped
-(``ingested_items``, ``conversation_facts_backfill``), so it can be stopped and
-run again; ``restart=True`` starts over.
+One run works through every batch until no old fact is left. Dry run by
+default: it does all of the work in one transaction and rolls it back, so its
+report (facts, duplicates, edges, nodes) is what applying would change, and it
+can be repeated. Applied, it commits batch by batch and remembers where it
+stopped (``ingested_items``, ``conversation_facts_backfill``), so an
+interrupted run resumes; ``restart=True`` starts over.
 
     python -m robothor.memory.conversation_backfill --tenant <id>            # dry run
     python -m robothor.memory.conversation_backfill --tenant <id> --apply
@@ -69,91 +70,147 @@ def _owner(tenant_id: str, session_key: str, sessions: dict[str, Any]) -> tuple[
 
 
 def rescope_conversation_facts(
-    tenant_id: str, *, apply: bool = False, batch: int = DEFAULT_BATCH, restart: bool = False
+    tenant_id: str,
+    *,
+    apply: bool = False,
+    batch: int = DEFAULT_BATCH,
+    restart: bool = False,
+    max_batches: int | None = None,
 ) -> dict[str, Any]:
     """Report (dry run) or apply the re-scoping of one tenant's old conversation facts.
 
-    A dry run does exactly what applying would, in one transaction, and rolls
-    it back: its counts are what ``apply`` would change.
+    Works through every batch of ``batch`` facts until none is left (or
+    ``max_batches`` have run). Applied, each batch commits and moves the saved
+    cursor, so an interrupted run resumes where it stopped. A dry run does
+    every batch in one transaction and rolls it all back, cursor included: its
+    totals are what applying would change, and it can be repeated.
     """
+    totals: dict[str, Any] = {"examined": 0, "rescoped": 0, "retired_duplicates": 0}
+    by_owner: Counter[str] = Counter()
+    left: Counter[str] = Counter()
+    graph_totals: Counter[str] = Counter()
+    batches = 0
+    more = False
     with tenant_scope(tenant_id), get_connection() as conn:
         cur = conn.cursor()
-        after = 0
-        if not restart:
-            cur.execute(
-                "SELECT content_hash FROM ingested_items WHERE tenant_id = %s "
-                "AND source_name = %s AND item_id = %s",
-                (tenant_id, _CURSOR_SOURCE, tenant_id),
-            )
-            row = cur.fetchone()
-            after = int(row[0]) if row and str(row[0]).isdigit() else 0
-        cur.execute(
-            "SELECT id, metadata->>'session_key' FROM memory_facts WHERE tenant_id = %s "
-            "AND scope_kind = 'shared' AND source_type = 'conversation' "
-            "AND metadata ? 'session_key' AND id > %s ORDER BY id LIMIT %s",
-            (tenant_id, after, batch + 1),
-        )
-        rows = list(cur.fetchall())
-        more = len(rows) > batch
-        rows = rows[:batch]
-        keys = sorted({str(k) for _id, k in rows})
-        cur.execute(
-            "SELECT session_key, person_id::text FROM chat_sessions "
-            "WHERE tenant_id = %s AND session_key = ANY(%s)",
-            (tenant_id, keys),
-        )
-        sessions = dict(cur.fetchall())
-        owners = {k: _owner(tenant_id, k, sessions) for k in keys}
-        by_owner: Counter[str] = Counter()
-        left: Counter[str] = Counter()
-        targets: dict[str, list[int]] = {}
-        for fact_id, key in rows:
-            sid, reason = owners[str(key)]
-            if sid is None:
-                left[reason] += 1
-                continue
-            by_owner[sid] += 1
-            targets.setdefault(sid, []).append(int(fact_id))
-        rescoped = retired = 0
-        for sid, group in targets.items():
-            moved, dropped = _rescope(cur, tenant_id, sid, group)
-            rescoped, retired = rescoped + moved, retired + dropped
-        graph = _unpublish_graph(cur, tenant_id, [i for g in targets.values() for i in g])
-        if rows:
-            cur.execute(
-                "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, "
-                "fact_ids, ingested_at) VALUES (%s, %s, %s, %s, '{}', NOW()) "
-                "ON CONFLICT (tenant_id, source_name, item_id) DO UPDATE "
-                "SET content_hash = EXCLUDED.content_hash, ingested_at = NOW()",
-                (tenant_id, _CURSOR_SOURCE, tenant_id, str(int(rows[-1][0]))),
-            )
-        if apply:
-            conn.commit()
-        else:
+        after = 0 if restart else _saved_cursor(cur, tenant_id)
+        while True:
+            part = _one_batch(cur, tenant_id, after, batch)
+            batches += 1
+            totals["examined"] += part["examined"]
+            totals["rescoped"] += part["rescoped"]
+            totals["retired_duplicates"] += part["retired"]
+            by_owner.update(part["by_owner"])
+            left.update(part["left"])
+            graph_totals.update(part["graph"])
+            more = part["more"]
+            if part["last_id"] is not None:
+                after = part["last_id"]
+            if apply:
+                conn.commit()
+            if not more or (max_batches is not None and batches >= max_batches):
+                break
+        if not apply:
             conn.rollback()
     report: dict[str, Any] = {
         "tenant_id": tenant_id,
         "dry_run": not apply,
-        "examined": len(rows),
+        "batches": batches,
+        "examined": totals["examined"],
         "would_rescope": sum(by_owner.values()),
         "by_owner": dict(by_owner),
         "left_shared": dict(left),
         "more": more,
-        "rescoped": rescoped if apply else 0,
-        "retired_duplicates": retired,
-        **graph,
+        "rescoped": totals["rescoped"] if apply else 0,
+        "retired_duplicates": totals["retired_duplicates"],
+        **{k: graph_totals.get(k, 0) for k in _GRAPH_KEYS},
     }
     logger.info(
-        "conversation backfill for %s (%s): %d re-scoped, %d duplicates retired, "
+        "conversation backfill for %s (%s): %d batches, %d re-scoped, %d duplicates retired, "
         "%d edges and %d nodes removed",
         tenant_id,
         "applied" if apply else "dry run",
-        rescoped,
-        retired,
-        graph["edges_removed"],
-        graph["nodes_removed"],
+        batches,
+        totals["rescoped"],
+        totals["retired_duplicates"],
+        report["edges_removed"],
+        report["nodes_removed"],
     )
     return report
+
+
+def _saved_cursor(cur: Any, tenant_id: str) -> int:
+    cur.execute(
+        "SELECT content_hash FROM ingested_items WHERE tenant_id = %s "
+        "AND source_name = %s AND item_id = %s",
+        (tenant_id, _CURSOR_SOURCE, tenant_id),
+    )
+    row = cur.fetchone()
+    return int(row[0]) if row and str(row[0]).isdigit() else 0
+
+
+def _one_batch(cur: Any, tenant_id: str, after: int, batch: int) -> dict[str, Any]:
+    """Re-scope the next ``batch`` old conversation facts past ``after``."""
+    cur.execute(
+        "SELECT id, metadata->>'session_key' FROM memory_facts WHERE tenant_id = %s "
+        "AND scope_kind = 'shared' AND source_type = 'conversation' "
+        "AND metadata ? 'session_key' AND id > %s ORDER BY id LIMIT %s",
+        (tenant_id, after, batch + 1),
+    )
+    rows = list(cur.fetchall())
+    more = len(rows) > batch
+    rows = rows[:batch]
+    keys = sorted({str(k) for _id, k in rows})
+    cur.execute(
+        "SELECT session_key, person_id::text FROM chat_sessions "
+        "WHERE tenant_id = %s AND session_key = ANY(%s)",
+        (tenant_id, keys),
+    )
+    sessions = dict(cur.fetchall())
+    owners = {k: _owner(tenant_id, k, sessions) for k in keys}
+    by_owner: Counter[str] = Counter()
+    left: Counter[str] = Counter()
+    targets: dict[str, list[int]] = {}
+    for fact_id, key in rows:
+        sid, reason = owners[str(key)]
+        if sid is None:
+            left[reason] += 1
+            continue
+        by_owner[sid] += 1
+        targets.setdefault(sid, []).append(int(fact_id))
+    rescoped = retired = 0
+    for sid, group in targets.items():
+        moved, dropped = _rescope(cur, tenant_id, sid, group)
+        rescoped, retired = rescoped + moved, retired + dropped
+    graph = _unpublish_graph(cur, tenant_id, [i for g in targets.values() for i in g])
+    last_id = int(rows[-1][0]) if rows else None
+    if last_id is not None:
+        cur.execute(
+            "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, "
+            "fact_ids, ingested_at) VALUES (%s, %s, %s, %s, '{}', NOW()) "
+            "ON CONFLICT (tenant_id, source_name, item_id) DO UPDATE "
+            "SET content_hash = EXCLUDED.content_hash, ingested_at = NOW()",
+            (tenant_id, _CURSOR_SOURCE, tenant_id, str(last_id)),
+        )
+    return {
+        "examined": len(rows),
+        "more": more,
+        "last_id": last_id,
+        "by_owner": by_owner,
+        "left": left,
+        "rescoped": rescoped,
+        "retired": retired,
+        "graph": graph,
+    }
+
+
+_GRAPH_KEYS = (
+    "evidence_removed",
+    "edges_removed",
+    "nodes_removed",
+    "nodes_kept_by_other_facts",
+    "nodes_kept_by_entities",
+)
 
 
 _SCOPED_HASH = (

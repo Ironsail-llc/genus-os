@@ -1336,8 +1336,10 @@ from one-to-one conversations are still `shared`. `python -m
 robothor.memory.conversation_backfill --tenant <id>` reports, changing
 nothing, which of them it would move and to whose scope, which it leaves shared
 (rooms, conversations with no known owner, sessions that are gone), and the
-duplicates, edges and nodes it would remove; `--apply` does it in resumable
-batches (`--batch`, `--restart`). Copies that meet in one scope with the same
+duplicates, edges and nodes it would remove, for the whole tenant; `--apply`
+does it. One run works through every batch: the dry run in one transaction it
+rolls back (so it can be repeated), `--apply` committing batch by batch and
+resuming where an interrupted run stopped (`--batch`, `--restart`). Copies that meet in one scope with the same
 text keep the oldest. Each moved fact leaves the shared graph as a private
 write never enters it: its evidence rows go and its relations are kept on it
 (`metadata.graph_pending_relations`), an edge left with no evidence is deleted,
