@@ -1096,3 +1096,20 @@ async def test_a_write_that_runs_out_of_time_is_never_run_again(world, monkeypat
     world.handlers.risky_result = {"done": True}
     _refusal(await _call(**_risky()), 409, rc.ERR_OUTCOME_UNKNOWN)
     assert [c[0] for c in world.handlers.calls] == ["acme_risky"]
+
+
+async def test_an_internal_failure_is_audited_and_keeps_a_writes_claim(world, monkeypatch) -> None:
+    from robothor.engine import remote_tools
+
+    async def broken(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(remote_tools, "_dispatch", broken)
+
+    answer = await _call(**_risky())
+
+    assert answer.status_code == 500
+    assert answer.json()["error"] == "internal_error"
+    [row] = _audits(world)
+    assert row["details"]["outcome"] == "internal_error"
+    assert world.ledger.rows[(CHILD, "req-1")]["state"] == "running"
