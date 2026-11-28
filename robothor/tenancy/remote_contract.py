@@ -36,6 +36,8 @@ ERR_BAD_ARGUMENTS = "remote_bad_arguments"
 ERR_OUTCOME_UNKNOWN = "remote_outcome_unknown"
 #: A replayed request id whose tool or arguments differ from the call that claimed it.
 ERR_REQUEST_MISMATCH = "remote_request_mismatch"
+#: The bridge could not check or route the call; nothing was forwarded.
+ERR_UNAVAILABLE = "remote_unavailable"
 ERR_TOO_LARGE = "remote_too_large"
 ERR_TIMEOUT = "remote_timeout"
 
@@ -50,6 +52,7 @@ ERROR_CODES: frozenset[str] = frozenset(
         ERR_BAD_ARGUMENTS,
         ERR_OUTCOME_UNKNOWN,
         ERR_REQUEST_MISMATCH,
+        ERR_UNAVAILABLE,
         ERR_TOO_LARGE,
         ERR_TIMEOUT,
     }
@@ -66,6 +69,7 @@ CLEAN_REFUSALS: dict[int, frozenset[str]] = {
     404: frozenset({ERR_TOOL_UNKNOWN, ERR_NOT_PERMITTED}),
     409: frozenset({ERR_ACCESS_MISMATCH, ERR_REQUEST_MISMATCH}),
     422: frozenset({ERR_BAD_ARGUMENTS}),
+    503: frozenset({ERR_UNAVAILABLE}),
 }
 
 

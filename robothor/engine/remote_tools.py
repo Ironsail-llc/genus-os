@@ -558,6 +558,15 @@ async def execute(tenant_id: str, body: Any) -> tuple[int, dict[str, Any]]:
         )
     except Refused as refused:
         return audited(refused.status, refused.body(), refused.code)
+    except Exception:
+        # Audited like every other answer. A write's claim, if it was taken,
+        # stays running: whether the tool ran is unknown, so it never re-runs.
+        logger.exception("remote tool call failed")
+        return audited(
+            500,
+            {"error": "internal_error", "message": "the call failed", "attestation": None},
+            "internal_error",
+        )
     if payload.get("outcome_unknown") is True:
         return audited(status, payload, rc.ERR_OUTCOME_UNKNOWN)
     return audited(status, payload, str(payload.get("outcome") or payload.get("error")))

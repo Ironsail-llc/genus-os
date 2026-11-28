@@ -400,7 +400,21 @@ async def _call(name: str, args: dict[str, Any], ctx: ToolContext, access: str) 
         "requested_by": _requested_by(ctx),
         "agent_id": ctx.agent_id,
     }
-    status, answer = await _send("POST", _CALL_PATH, ctx, body=body)
+    try:
+        status, answer = await _send("POST", _CALL_PATH, ctx, body=body)
+    except BaseException as exc:
+        # Cancelled mid-request, or a failure no answer describes: the call
+        # may have reached the child. Audited, then left to the dispatcher.
+        _audit(
+            name,
+            ctx,
+            target,
+            "unknown" if access == ACCESS_WRITE else "error",
+            remote,
+            dry_run=dry_run,
+            reason=f"interrupted ({type(exc).__name__}); the call may have reached the child",
+        )
+        raise
     if status == 200 and access == ACCESS_WRITE and not is_known_answer(answer):
         status = -1  # a 200 the target never gives: read as an unexpected answer
     if status != 200 or not isinstance(answer, dict):
