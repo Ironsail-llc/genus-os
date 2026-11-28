@@ -138,3 +138,86 @@ def test_a_failed_judge_or_bad_labels_exit_three(monkeypatch, capsys, tmp_path) 
 def test_extraction_with_world_is_refused(capsys) -> None:
     assert cli.cmd_memory_eval(_parse("--extraction", "--world")) == 3
     assert "--extraction" in capsys.readouterr().out
+
+
+def _fixtures(tmp_path):
+    fixtures = tmp_path / "set.yaml"
+    fixtures.write_text("version: 1\nconversations: []\n")
+    return fixtures
+
+
+def test_baseline_flag_parses() -> None:
+    a = _parse("--extraction", "--baseline", "/x/b.yaml")
+    assert a.baseline == "/x/b.yaml"
+    assert _parse("--extraction").baseline is None
+
+
+def test_a_regression_against_the_baseline_exits_two(stubs, monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.setattr(cli, "load_baseline", lambda p: {"loaded": str(p)})
+    monkeypatch.setattr(
+        cli,
+        "compare_to_baseline",
+        lambda report, base: {
+            "regressed": True,
+            "rows": [],
+            "thresholds": [],
+            "thresholds_status": "PROPOSED",
+        },
+    )
+    rc = cli.cmd_memory_eval(
+        _parse("--extraction", "--fixtures", str(_fixtures(tmp_path)), "--baseline", "b.yaml")
+    )
+    assert rc == 2
+
+
+def test_no_regression_exits_zero_whatever_the_proposed_thresholds(
+    stubs, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(cli, "load_baseline", lambda p: {})
+    monkeypatch.setattr(
+        cli,
+        "compare_to_baseline",
+        lambda report, base: {
+            "regressed": False,
+            "rows": [],
+            "thresholds": [{"metric": "recall", "met": False}],
+            "thresholds_status": "PROPOSED",
+        },
+    )
+    rc = cli.cmd_memory_eval(
+        _parse("--extraction", "--fixtures", str(_fixtures(tmp_path)), "--baseline", "b.yaml")
+    )
+    assert rc == 0
+
+
+def test_a_baseline_that_cannot_be_compared_exits_three(stubs, monkeypatch, tmp_path) -> None:
+    def refuse(report, base):
+        raise EvalPreconditionError("baseline is for another model")
+
+    monkeypatch.setattr(cli, "load_baseline", lambda p: {})
+    monkeypatch.setattr(cli, "compare_to_baseline", refuse)
+    rc = cli.cmd_memory_eval(
+        _parse("--extraction", "--fixtures", str(_fixtures(tmp_path)), "--baseline", "b.yaml")
+    )
+    assert rc == 3
+
+
+def test_record_baseline_with_extraction_writes_the_baseline_file(
+    stubs, monkeypatch, tmp_path
+) -> None:
+    written: dict[str, Any] = {}
+    monkeypatch.setattr(
+        cli, "write_baseline", lambda path, report: written.update(path=str(path), report=report)
+    )
+    target = tmp_path / "b.yaml"
+    rc = cli.cmd_memory_eval(
+        _parse(
+            "--extraction",
+            "--fixtures",
+            str(_fixtures(tmp_path)),
+            "--baseline",
+            str(target),
+            "--record-baseline",
+        )
+    )
+    assert rc == 0 and written["path"] == str(target)

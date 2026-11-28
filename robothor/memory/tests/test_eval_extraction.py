@@ -731,3 +731,215 @@ def test_a_file_that_is_not_a_mapping_is_a_value_error(tmp_path: Path) -> None:
     path.write_text("- 1\n- 2\n", encoding="utf-8")
     with pytest.raises(ValueError, match="list.yaml"):
         ex.load_fixtures(path)
+
+
+# ═══ the recorded baseline: regressions fail, proposed thresholds report ═
+
+BASELINE = REPO / "docs" / "benchmarks" / "memory" / "conversation-facts-baseline.yaml"
+
+
+def _baseline(**over: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "version": 1,
+        "suite_id": ex.SUITE_ID,
+        "model": "m",
+        "split": "dev",
+        "runs": 3,
+        "metrics": {"recall": 0.80, "precision": 0.60, "misattributed_to_operator": 1.0},
+        "tolerance": {"recall": 0.10, "precision": 0.05, "misattributed_to_operator": 1.0},
+        "thresholds": {
+            "status": "PROPOSED",
+            "min": {"recall": 0.85},
+            "max": {"misattributed_to_operator": 0},
+        },
+    }
+    base.update(over)
+    return base
+
+
+def _report(**metrics: Any) -> dict[str, Any]:
+    return {"model": "m", "split": "dev", "repeats": 2, "comparable": metrics}
+
+
+def test_a_run_inside_the_tolerance_does_not_regress() -> None:
+    out = ex.compare_to_baseline(
+        _report(recall=0.71, precision=0.56, misattributed_to_operator=1.5), _baseline()
+    )
+    assert out["regressed"] is False
+    assert {r["metric"] for r in out["rows"]} == {
+        "recall",
+        "precision",
+        "misattributed_to_operator",
+    }
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [
+        {"recall": 0.69, "precision": 0.60, "misattributed_to_operator": 1.0},
+        {"recall": 0.80, "precision": 0.54, "misattributed_to_operator": 1.0},
+        {"recall": 0.80, "precision": 0.60, "misattributed_to_operator": 2.5},
+    ],
+)
+def test_a_metric_beyond_its_tolerance_regresses(metrics: dict[str, float]) -> None:
+    out = ex.compare_to_baseline(_report(**metrics), _baseline())
+    assert out["regressed"] is True
+    assert sum(r["regressed"] for r in out["rows"]) == 1
+
+
+def test_proposed_thresholds_are_reported_and_never_fail_the_run() -> None:
+    out = ex.compare_to_baseline(
+        _report(recall=0.80, precision=0.60, misattributed_to_operator=1.0), _baseline()
+    )
+    assert out["regressed"] is False
+    assert out["thresholds_status"] == "PROPOSED"
+    by = {t["metric"]: t for t in out["thresholds"]}
+    assert by["recall"]["met"] is False and by["misattributed_to_operator"]["met"] is False
+
+
+@pytest.mark.parametrize(
+    "over", [{"model": "other"}, {"split": "held_out"}, {"suite_id": "something-else"}]
+)
+def test_a_baseline_for_another_model_or_split_cannot_be_compared(over: dict[str, Any]) -> None:
+    with pytest.raises(EvalPreconditionError, match="baseline"):
+        ex.compare_to_baseline(
+            _report(recall=0.8, precision=0.6, misattributed_to_operator=1.0), _baseline(**over)
+        )
+
+
+def test_counts_are_compared_per_run() -> None:
+    metrics = {"misattributed_to_operator": 3, "guest_as_user": 0, "filler_facts": 0}
+    flat = ex.comparable_metrics({**_full_metrics(), **metrics}, repeats=3)
+    assert flat["misattributed_to_operator"] == pytest.approx(1.0)
+
+
+def _full_metrics() -> dict[str, Any]:
+    return {
+        "recall": 0.8,
+        "precision": 0.6,
+        "trust_accuracy": 0.9,
+        "speaker_accuracy": 1.0,
+        "turn_accuracy": 1.0,
+        "date_accuracy": 0.5,
+        "dated_correct": [9, 10],
+        "undated_left_undated": [5, 10],
+        "precision_by_trust": {"user_stated": [9, 10]},
+        "misattributed_to_operator": 0,
+        "guest_as_user": 0,
+        "filler_facts": 0,
+    }
+
+
+def test_rates_from_pairs_are_flattened() -> None:
+    flat = ex.comparable_metrics(_full_metrics(), repeats=1)
+    assert flat["dated_correct_rate"] == pytest.approx(0.9)
+    assert flat["undated_left_undated_rate"] == pytest.approx(0.5)
+    assert flat["user_stated_precision"] == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_a_guest_claim_written_as_the_users_is_counted(tmp_path: Path) -> None:
+    path = tmp_path / "g.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """
+            version: 1
+            conversations:
+              - id: guest-a
+                category: guests
+                at: "2026-03-04T09:00:00+00:00"
+                turns:
+                  - {role: user, text: "Hi, I am here with my friend."}
+                  - {role: user, speaker: Bob, owner: false, text: "I just adopted a cat."}
+                facts:
+                  - fact: "Bob adopted a cat."
+                    keys: ["cat"]
+                    speaker: Bob
+                    trust: external
+                    turns: [2]
+                    date: null
+                    paraphrase: "Bob has adopted a new cat."
+                    decoy: "Bob gave away his cat."
+            """
+        ),
+        encoding="utf-8",
+    )
+    extract = _stub_extract({"Hi": [_x("The user adopted a cat recently.", "external", [2])]})
+    report = await ex.run_extraction_eval(path, model="m", llm=_keyword_llm, extract=extract)
+    assert report["metrics"]["guest_as_user"] == 1
+
+
+@pytest.mark.asyncio
+async def test_precision_is_also_reported_by_stored_origin(small_path: Path) -> None:
+    extract = _stub_extract(
+        {
+            "dark roast": [
+                _x("The user prefers dark roast coffee."),
+                _x("The assistant said hello to the user.", "assistant", [2]),
+            ]
+        }
+    )
+    report = await ex.run_extraction_eval(small_path, model="m", llm=_keyword_llm, extract=extract)
+    by = report["metrics"]["precision_by_trust"]
+    assert by["user_stated"] == [1, 1] and by["agent_generated"] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_the_run_report_carries_the_comparable_metrics_and_per_run_values(
+    small_path: Path,
+) -> None:
+    report = await ex.run_extraction_eval(
+        small_path, model="m", llm=_keyword_llm, extract=_stub_extract({}), repeats=2
+    )
+    assert set(report["comparable"]) >= {"recall", "misattributed_to_operator", "guest_as_user"}
+    assert all(set(r) >= {"recall", "guest_as_user"} for r in report["per_repeat"])
+
+
+def test_a_new_baseline_takes_its_tolerance_from_the_runs_spread() -> None:
+    report = {
+        "suite_id": ex.SUITE_ID,
+        "model": "m",
+        "judge_model": "j",
+        "split": "dev",
+        "repeats": 3,
+        "comparable": {"recall": 0.85, "misattributed_to_operator": 1.0},
+        "per_repeat": [
+            {"recall": 0.80, "misattributed_to_operator": 1},
+            {"recall": 0.909, "misattributed_to_operator": 2},
+            {"recall": 0.855, "misattributed_to_operator": 2},
+        ],
+    }
+    out = ex.baseline_from_report(report, thresholds=_baseline()["thresholds"])
+    assert out["metrics"]["recall"] == pytest.approx(0.85)
+    assert out["tolerance"]["recall"] == pytest.approx(0.11)  # range 0.109, up to a point
+    assert out["tolerance"]["misattributed_to_operator"] == pytest.approx(1.0)
+    assert out["thresholds"]["status"] == "PROPOSED"
+
+
+def test_a_spread_of_nothing_still_allows_one_unit() -> None:
+    report = {
+        "suite_id": ex.SUITE_ID,
+        "model": "m",
+        "judge_model": "j",
+        "split": "dev",
+        "repeats": 2,
+        "comparable": {"recall": 1.0, "filler_facts": 0.0},
+        "per_repeat": [{"recall": 1.0, "filler_facts": 0}, {"recall": 1.0, "filler_facts": 0}],
+    }
+    out = ex.baseline_from_report(report, thresholds={"status": "PROPOSED"})
+    assert out["tolerance"] == {"recall": 0.01, "filler_facts": 1.0}
+
+
+def test_the_committed_baseline_loads_and_its_thresholds_are_only_proposed() -> None:
+    base = ex.load_baseline(BASELINE)
+    assert base["model"] == "qwen3:8b" and base["split"] == "dev" and base["runs"] >= 2
+    assert set(base["tolerance"]) == set(base["metrics"])
+    assert base["thresholds"]["status"] == "PROPOSED"
+    assert "operator" in base["thresholds"]["note"]
+
+
+def test_a_baseline_without_its_parts_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "b.yaml"
+    path.write_text("version: 1\nmodel: m\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="b.yaml"):
+        ex.load_baseline(path)
