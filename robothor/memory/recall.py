@@ -374,7 +374,7 @@ def apply_reserved(
     ``n`` rows in the top ``limit`` came from that leg, the missing ones are
     taken from ``pool`` in the order of that leg's own ``leg_scores`` (then its
     rank), and they replace the lowest-ranked rows that do not themselves hold
-    a reserved place. A leg in :data:`BEST_ROW_LEGS` (the graph) keeps its
+    a reserved place and are not marked ``judged_in``. A leg in :data:`BEST_ROW_LEGS` (the graph) keeps its
     best ``n`` rows instead: another of its rows that the head holds anyway
     uses up no place, and the missing ones are added *after* the head,
     evicting nothing. The result is then up to ``limit`` + that leg's ``n``
@@ -388,7 +388,9 @@ def apply_reserved(
     ``limit`` 1 or 2.
     """
     out = list(ranked[:limit])
-    protected: set[tuple[Any, Any]] = set()
+    # A row the reranker judged in beside the head (``judged_in``) sits last
+    # by rule, not by score, so it is never the row a pick replaces.
+    protected: set[tuple[Any, Any]] = {_row_key(r) for r in out if r.get("judged_in")}
     picks: list[dict[str, Any]] = []
     # The graph's rows (BEST_ROW_LEGS) go after the head and evict nothing.
     appended: list[dict[str, Any]] = []

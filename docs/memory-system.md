@@ -271,7 +271,9 @@ figures are inflated and the comparison is between runs on that one machine:
 
 The classic 267-case suite is unchanged (265 / 267). Returned rows keep their fields and add `kind`,
 `leg_ranks`, `leg_scores`, `rrf_score`, `fused_rank`, `rerank_score` and
-`relevance`. The search path is read-only.
+`relevance`. A conversation segment judged in beside a head of facts also
+carries `judged_in`, and a reserved pick never takes its place. The search
+path is read-only.
 
 Flags that still shape this path: `MEMORY_RANK_BLEND=0` skips the blend (fused
 or reranked order, cut to `limit`); `MEMORY_DEDUP=0` keeps near-duplicates;

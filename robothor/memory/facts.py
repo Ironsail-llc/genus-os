@@ -1659,12 +1659,15 @@ def _last_in_head(
     whatever its score: read first, it made the answer model abstain on the
     memory evaluation's world. Its fused rank, the other place it has, is
     past every row the head holds (that is when it is judged) and so past
-    what the context can hold.
+    what the context can hold. The row is marked ``judged_in`` so that
+    ``apply_reserved`` does not hand its place to a reserved pick.
     """
     if key is None:
         return ranked
     rows = [r for r in ranked if (r.get("kind"), r.get("id")) != key]
     moved = [r for r in ranked if (r.get("kind"), r.get("id")) == key]
+    for r in moved:
+        r["judged_in"] = True
     return [*rows, *moved]
 
 
@@ -1837,9 +1840,10 @@ async def search_facts(
            max(30, limit * 3).
         2. ``fuse`` — reciprocal rank fusion, k=60, ``LEG_WEIGHTS``.
         3. Reranker (on by default; ``MEMORY_RERANK_ENABLED``) scores the head
-           of the fused list on 0..1 and orders by that score; the first row
-           of each segment leg is moved into that head when it fused below
-           it. On any error the fused order stands.
+           of the fused list on 0..1 and orders by that score; when the head
+           holds no segment, the best segment is scored as one more pair
+           and, judged relevant, takes the head's last place. On any error
+           the fused order stands.
         4. Blend — relevance (rerank score, else from fused rank) + recency +
            importance + access, supersession demotion; near-duplicates dropped.
         5. ``RESERVED_PLACES`` — a leg keeps its reserved places; the graph's
