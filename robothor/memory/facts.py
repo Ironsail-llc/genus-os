@@ -1709,11 +1709,18 @@ async def _rank_pool(
                 scored = await rerank_with_fallback(
                     query, ordered, top_k=rerank_topk + 1, max_candidates=head + 1
                 )
-                reranked = [
-                    r for r in scored if (r.get("kind"), r.get("id")) != key or _judged_relevant(r)
-                ][:rerank_topk]
-                if any((r.get("kind"), r.get("id")) == key for r in reranked):
-                    kept = key
+                if not any(r.get("rerank_score") is not None for r in scored):
+                    # Unavailable, or every pair failed: nothing was judged,
+                    # so the fused order stands exactly as without the rule.
+                    reranked = pool[:rerank_topk]
+                else:
+                    reranked = [
+                        r
+                        for r in scored
+                        if (r.get("kind"), r.get("id")) != key or _judged_relevant(r)
+                    ][:rerank_topk]
+                    if any((r.get("kind"), r.get("id")) == key for r in reranked):
+                        kept = key
             logger.info(
                 "search_facts rerank: %d candidates → %d survivors (top_k=%d) in %dms",
                 len(pool),
