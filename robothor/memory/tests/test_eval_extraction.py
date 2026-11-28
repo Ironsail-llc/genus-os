@@ -682,3 +682,52 @@ async def test_a_judge_error_while_scoring_is_logged_and_in_the_summary(
     assert report["metrics"]["judge_errors"] == 1
     assert "| Judge errors | 1 |" in ex.format_extraction_markdown(report)
     assert any("unparseable" in r.getMessage() for r in caplog.records)
+
+
+# ═══ a broken label is a ValueError naming it, never a crash ═════════════
+
+
+def _broken(tmp_path: Path, edit) -> Path:
+    import yaml
+
+    data = yaml.safe_load(_SMALL)
+    edit(data)
+    path = tmp_path / "broken.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    ("edit", "names"),
+    [
+        (lambda d: d["conversations"][0]["facts"][0].update(trust=[]), "pref-a#1"),
+        (lambda d: d["conversations"][0]["facts"][0].update(speaker=[]), "pref-a#1"),
+        (lambda d: d["conversations"][0]["facts"][0].update(trust=None), "pref-a#1"),
+        (lambda d: d["conversations"][0].pop("at"), "pref-a"),
+        (lambda d: d["conversations"][0].update(at="not a time"), "pref-a"),
+        (lambda d: d["conversations"][0]["turns"].append("just a string"), "pref-a"),
+        (lambda d: d["conversations"][0].update(turns="nope"), "pref-a"),
+        (lambda d: d["conversations"][0]["facts"].append("just a string"), "pref-a"),
+        (lambda d: d["conversations"][1].update(third_party_turns=[7]), "paste-a"),
+        (lambda d: d["conversations"][1].update(third_party_turns=["one"]), "paste-a"),
+        (lambda d: d["conversations"].append("not a conversation"), "conversation"),
+        (lambda d: d.update(conversations="nope"), "conversations"),
+    ],
+)
+def test_a_broken_label_is_a_value_error_naming_it(tmp_path: Path, edit, names: str) -> None:
+    with pytest.raises(ValueError, match=names):
+        ex.load_fixtures(_broken(tmp_path, edit))
+
+
+def test_a_yaml_syntax_error_is_a_value_error_naming_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "syntax.yaml"
+    path.write_text("version: 1\nconversations: [\n  - id: x\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="syntax.yaml"):
+        ex.load_fixtures(path)
+
+
+def test_a_file_that_is_not_a_mapping_is_a_value_error(tmp_path: Path) -> None:
+    path = tmp_path / "list.yaml"
+    path.write_text("- 1\n- 2\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="list.yaml"):
+        ex.load_fixtures(path)
