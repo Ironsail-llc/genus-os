@@ -84,6 +84,26 @@ def is_known_answer(body: Any) -> bool:
     return isinstance(body, dict) and body.get("outcome") in OUTCOMES
 
 
+#: ``audit_log.status`` for a remote-tools row: one short word (the column is
+#: ``varchar(20)``). The specific code goes in ``details.outcome``. ``replay``
+#: is the home engine's word for an answer from its own effect ledger.
+AUDIT_STATUSES: frozenset[str] = frozenset(
+    {"ok", "error", "denied", "dry_run", "replayed", "replay", "unknown"}
+)
+
+
+def audit_status(outcome: str, access: str) -> str:
+    """The audit row's status for a target-side ``outcome`` (code or answer)."""
+    if outcome in OUTCOMES:
+        return outcome
+    if outcome == ERR_OUTCOME_UNKNOWN:
+        return "unknown"
+    if outcome in (ERR_TIMEOUT, "internal_error"):
+        # A write cut short may have acted; a read only failed.
+        return "unknown" if access == ACCESS_WRITE else "error"
+    return "denied"
+
+
 # ── Names ────────────────────────────────────────────────────────────────────
 
 #: Audit event written under the TARGET tenant for every remote call.

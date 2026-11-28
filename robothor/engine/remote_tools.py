@@ -422,16 +422,21 @@ def audit(
             "request_id": request_id,
             "args_digest": rc.args_digest(args),
         }
+        from robothor.audit.logger import COLUMN_LIMITS
+
+        agent = agent_id[:_AGENT_ID_MAX]
+        room = COLUMN_LIMITS["actor"] - len("remote::") - len(agent)
         get_event_writer().submit(
             log_event,
             event_type=rc.EVENT_REMOTE_TOOL_CALL,
             action=tool,
             category="agent",
-            actor=f"remote:{home_tenant}:{agent_id}",
+            # Cut to the column: a longer value would lose the whole row.
+            actor=f"remote:{home_tenant[:room]}:{agent}",
             user_id=user_id,
             details=details,
-            target=tenant_id,
-            status=outcome,
+            target=tenant_id[: COLUMN_LIMITS["target"]],
+            status=rc.audit_status(outcome, access),
             tenant_id=tenant_id,
         )
     except Exception:  # noqa: BLE001 - audit must not break the call it records
