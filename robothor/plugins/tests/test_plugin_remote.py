@@ -117,10 +117,7 @@ def test_a_declaration_is_loaded_with_its_defaults() -> None:
 
 
 def test_the_plugin_is_named_by_its_distribution_when_it_has_one() -> None:
-    result = _load(
-        _payload({"acme_lookup": {"access": "read"}}),
-        manifest="handlers: [acme_lookup, acme_update]\n",
-    )
+    result = _load(_payload({"acme_lookup": {"access": "read"}}))
 
     assert result.remote["acme_lookup"]["plugin"] == "acme-tools"
 
