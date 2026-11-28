@@ -504,7 +504,9 @@ How a write tool reports a failure decides what the parent is told:
   return a plain error. That is a finished call: stored, replayed for the same
   request id, never fenced.
 
-The call then goes through the normal dispatch in the child tenant, so
+A declared name that an external MCP adapter in the child also provides is
+not offered remotely (unknown to the parent), since dispatch would route it to
+the adapter. The call then goes through the normal dispatch in the child tenant, so
 the role's permission rows, kill switches and your own audit apply as they do
 for any call. `parent_agent` is denied everything until the child grants it a
 tool ([Service roles](runbooks/SERVICE_ROLES.md#roles-available)). Your tool

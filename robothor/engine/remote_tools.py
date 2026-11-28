@@ -109,9 +109,15 @@ def declarations() -> dict[str, dict[str, Any]]:
 
 
 def _schema(tool: str) -> dict[str, Any] | None:
+    """The plugin tool's registered schema; None when the name is not the
+    plugin's to run here (an external adapter routes it, so dispatch would
+    send the call to that adapter, not to the plugin that declared it)."""
     from robothor.engine.tools.registry import get_registry
 
-    schema = get_registry().get_schema(tool)
+    registry = get_registry()
+    if registry.get_adapter_route(tool):
+        return None
+    schema = registry.get_schema(tool)
     function = (schema or {}).get("function")
     return function if isinstance(function, dict) else None
 
@@ -600,7 +606,23 @@ async def _execute(
     # 5. arguments
     if not isinstance(dry_run_asked, bool):
         raise Refused(422, rc.ERR_BAD_ARGUMENTS, "dry_run must be true or false.")
+    if not write and dry_run_asked:
+        raise Refused(422, rc.ERR_BAD_ARGUMENTS, "A read has no dry run; drop dry_run.")
     parameters = function.get("parameters") or {"type": "object", "properties": {}}
+    properties = parameters.get("properties") if isinstance(parameters, dict) else None
+    if (
+        isinstance(args, dict)
+        and "dry_run" in args
+        and not (isinstance(properties, dict) and "dry_run" in properties)
+    ):
+        # Most likely meant as org_tool_write's own dry run: the tool would
+        # ignore it and run for real.
+        raise Refused(
+            422,
+            rc.ERR_BAD_ARGUMENTS,
+            "This tool takes no dry_run argument; pass dry_run at the top level of "
+            "the call, beside args, for a dry run.",
+        )
     problem = (
         "args must be an object" if not isinstance(args, dict) else schema_problem(args, parameters)
     )
