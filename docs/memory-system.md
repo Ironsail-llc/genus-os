@@ -69,7 +69,15 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      entities.
    - `segment` (`include_segments`, **on by default**) — raw conversation
      segments from `search_segments` (see
-     [Conversation segments](#conversation-segments)), kind `segment`. Each
+     [Conversation segments](#conversation-segments)), kind `segment`; the
+     store fuses its own dense and keyword legs and enters as this one leg.
+     Entering them as two legs was measured and rejected: at full weight
+     segments took about half of the reranker's head in the fact strata of
+     the memory evaluation's world and pushed out the facts that answer
+     multi-hop and point-in-time questions; at half weight a segment only one
+     leg found was halved, and conversation evidence fell out of the context
+     tail. A segment buried under many facts reaches the reranker through
+     the head rule in step 3 instead. Each
      row's `fact_text` is the whole verbatim text; the reranker reads only a
      `SEGMENT_RERANK_CHARS` (1,200) excerpt around the best keyword match
      (`rerank_excerpt`). Which segments come back depends on the reader:
@@ -97,12 +105,33 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    returns. When one of the two is not listed, its logprob is bounded by the
    lowest one listed, so a confident answer still gets a graded score. (An
    Ollama without logprobs gives 1 or 0.) Candidates are ordered by that
-   score alone, whichever leg found them. On any reranker error the fused
-   order stands.
+   score alone, whichever leg found them. A question about a subject that
+   many extracted facts name fills the scored head with facts both fact legs
+   found, and the segment that holds the answer fuses below it. So when the
+   head holds no segment at all, the best one (the first segment of the
+   fused list) is scored as one more pair (`facts._segment_to_judge`). It
+   takes a place only when judged relevant (score at least
+   `reranker.RELEVANT_SCORE`, 0.5), and that place is the head's last
+   (`facts._last_in_head`), whatever its score: read first, it made the
+   answer model abstain, and its fused rank is past what the context holds.
+   Otherwise it is dropped and the result is exactly what it is without it. A segment the head already holds costs
+   nothing extra. With the reranker unavailable, or every pair failing,
+   nothing is judged and the fused order stands exactly as without the rule:
+   the segment stays at its fused place.
 4. **Blend** — `relevance` (the rerank score, or `10 / (10 + fused rank)` when
    there is none — one 0..1 scale for every leg; cosine similarity is not used)
    + recency + importance + access count, with supersession demotion; then
-   near-duplicates are dropped.
+   near-duplicates are dropped, here and in the head, the reserved picks and
+   the budget fill: a row whose words overlap a kept row's by 75% or more, or
+   contain or are inside them, whatever the two rows' kinds. A fact is a
+   summary of the conversation it came from, so a fact and its segment often
+   collapse to whichever ranks first. Comparing rows only within their kind,
+   and dropping only the contained row across kinds, were both measured and
+   rejected: the duplicates they kept pushed the conversation evidence for
+   point-in-time and multi-hop questions out of the context (held-out
+   point_in_time 31 to 26 and 25 of 40). The cost is the `update` shape: a
+   fact that still states an old value is inside the newer segment that
+   changes it, and when the fact ranks first the segment is dropped.
 5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps
    reserved rows whenever it returned anything, chosen by its own score:
    `graph` 2, `entity_expansion` 1. A related-but-not-similar fact is exactly
@@ -127,8 +156,9 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      cuts the result to `limit`: on that path a graph row that follows the
      head is usually cut. Where the router re-orders the head by recency (a
      "most recent" question), a row only the graph leg found is left out of
-     that sort and stays after the head. The router's 4,000-character budget
-     and the engine's tool-output cap bound the text either way.
+     that sort and stays after the head. The router's recall context cap
+     (4,000 characters by default) and the engine's tool-output cap bound the
+     text either way.
 6. **Budget fill** — the reranker returns only the rows it scored (16), so
    the rest of the fused list follows in fused order, unscored, up to
    `limit` rows in all, skipping near-duplicates of rows already returned.
@@ -158,19 +188,33 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    and the failure is logged.
 
 Every leg shares `limit`. The `search_memory` tool fills the recall context
-cap, `RECALL_CONTEXT_CHARS` (4,000 characters, in `robothor/memory/recall.py`,
-the cap the routed path already applied), on both paths: with no `limit` it
+cap, the setting `ROBOTHOR_MEMORY_RECALL_CONTEXT_CHARS` (default 4,000
+characters, `recall.RECALL_CONTEXT_CHARS`, the cap the routed path already
+applied; read once per process, see
+[the configuration reference](reference/configuration.md)), on both paths: with no `limit` it
 asks for up to `RECALL_FILL_ROWS` (50) rows; a `limit` the caller names bounds
 the rows and is itself bounded by `RECALL_FILL_ROWS`. Rows are packed by one
 rule, `recall.pack_within`, on every path (both tools, the routed path and the
 eval): a row that does not fit in what is left of the cap is skipped and a
 later, smaller one may still go in, so one long conversation segment does not
-end a context with room left. The top-ranked row is never dropped: if it alone
-is over the cap it is cut to the cap and ends with ` [truncated]` (the row
-carries `truncated: true`), so a result is never empty because its best row
-was long. No eval context had a first candidate over the cap (0 of 360 on each
-split; the longest was 27 tokens), so the measured numbers are unaffected. On the routed path a temporal query re-sorts the
-head by recency; the tail stays behind it.
+stop the rows after it. Then, if at least `RECALL_MIN_CUT_CHARS` (300
+characters, about 75 tokens: room for a fact with its context or one short
+exchange) of the cap is still empty, the best-ranked skipped row is cut to
+exactly that room, ends with ` [truncated]` (the row carries
+`truncated: true`) and keeps its rank position. Every row the skipping kept
+stays whole, and at most one row is cut; with less room left it stays empty.
+(Skipping alone left room: a 2,100-character segment followed by
+2,000-character ones packed to 2,100 of 4,000 characters.) A segment judged
+in beside a head of facts (`judged_in`, see step 3) that does not fit whole is
+cut to fit at the point it is reached, when at least the minimum remains,
+instead of being skipped: skipped, the short facts after it took the room, and
+a segment judged relevant never reached the context (16 head facts of 150
+characters left 1,600; the fill used it). The eval packs it the same way, its
+minimum in tokens. The top-ranked row
+is never dropped: if it alone is over the cap it is cut to the cap, so a
+result is never empty because its best row was long. The eval sizes in tokens
+and uses the same minimum, 75 tokens. On the routed path a temporal query
+re-sorts the head by recency; the tail stays behind it.
 MCP `search_memory` follows the same rule (`recall.recall_limit` and
 `recall.within_context_cap`); it names no reader, so it reads shared rows
 only.
@@ -234,7 +278,9 @@ figures are inflated and the comparison is between runs on that one machine:
 
 The classic 267-case suite is unchanged (265 / 267). Returned rows keep their fields and add `kind`,
 `leg_ranks`, `leg_scores`, `rrf_score`, `fused_rank`, `rerank_score` and
-`relevance`. The search path is read-only.
+`relevance`. A conversation segment judged in beside a head of facts also
+carries `judged_in`, and a reserved pick never takes its place. The search
+path is read-only.
 
 Flags that still shape this path: `MEMORY_RANK_BLEND=0` skips the blend (fused
 or reranked order, cut to `limit`); `MEMORY_DEDUP=0` keeps near-duplicates;

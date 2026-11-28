@@ -1,9 +1,10 @@
 """The recall-leg contract: named legs in, one fused candidate list out.
 
 A **leg** is anything that turns a query into a ranked list of
-:class:`Candidate` objects, best first: today the vector and keyword legs over
-``memory_facts``, entity-graph expansion, insights, episodes and chat turns;
-tomorrow raw conversation segments and graph activation. A leg must return:
+:class:`Candidate` objects, best first: the vector and keyword legs over
+``memory_facts``, conversation segments (``segment``, which the segment store
+fuses from its own dense and keyword legs), graph activation, entity-graph
+expansion, insights, episodes and chat turns. A leg must return:
 
 - ``id`` and ``kind`` — together the identity of the item. The same fact found
   by two legs is merged; a fact and an episode that share an integer id are not.
@@ -52,11 +53,21 @@ RANK_RELEVANCE_HALF = 10
 
 _T = TypeVar("_T")
 
-# The recall context cap: characters of memory text one recall returns. Recall
-# fills it, reranked head first, then the remaining fused candidates in fused
-# order; the reranker scores only its head (RERANK_MAX_CANDIDATES), so its cost
-# does not grow. It was the router's DEFAULT_BUDGET_CHARS and keeps its value.
+# The recall context cap's default: characters of memory text one recall
+# returns. Recall fills it, reranked head first, then the remaining fused
+# candidates in fused order; the reranker scores only its head
+# (RERANK_MAX_CANDIDATES), so its cost does not grow. It was the router's
+# DEFAULT_BUDGET_CHARS and keeps its value. The setting
+# ROBOTHOR_MEMORY_RECALL_CONTEXT_CHARS (recall_context_chars) sets the cap.
 RECALL_CONTEXT_CHARS = 4000
+
+
+def recall_context_chars() -> int:
+    """The recall context cap in characters, from the settings (read once per process)."""
+    from robothor.settings import get_settings
+
+    return int(get_settings().engine.recall_context_chars)
+
 
 # The most rows a recall asks for when the caller names no limit; the
 # character cap above normally binds first.
@@ -78,41 +89,83 @@ def recall_limit(named: Any) -> int:
 TRUNCATION_MARKER = " [truncated]"
 
 
+#: Least room, in characters, worth filling with a cut row. About 75 tokens:
+#: two or three sentences, room for a fact with its context or one short
+#: exchange of a conversation. Less than that rarely holds a whole statement,
+#: and the 12-character marker would be a large share of it.
+RECALL_MIN_CUT_CHARS = 300
+
+
 def pack_within(
     items: Sequence[_T],
     cap: int | None,
     size: Callable[[_T], int],
     truncate: Callable[[_T, int], _T] | None = None,
+    min_cut: int = RECALL_MIN_CUT_CHARS,
+    cut_now: Callable[[_T], bool] | None = None,
 ) -> list[_T]:
     """The one packing rule: ``items`` in order, each kept while it still fits.
 
     An item that does not fit in what is left of ``cap`` is skipped and a
-    later, smaller one may still go in, so the cap is used and never exceeded
-    and the kept items stay in rank order. ``cap`` None keeps everything.
-    Skipping, not stopping: one long conversation segment early in the head
-    must not end a context that has room for the rows after it. The first,
+    later, smaller one may still go in, so the cap is never exceeded and the
+    kept items stay in rank order. ``cap`` None keeps everything. Skipping,
+    not stopping: one long conversation segment early in the head must not end
+    a context that has room for the rows after it.
+
+    Then, if at least ``min_cut`` (in ``size``'s units) of the cap is still
+    empty, the best-ranked item that was skipped is cut to exactly that room
+    by ``truncate`` (which marks the cut) and kept in its rank position. Every
+    item the skipping kept stays, whole; at most one item is cut. The first,
     top-ranked item is never skipped: if it alone is larger than the cap it is
-    kept cut to the cap by ``truncate`` (which marks the cut), so a result is
-    never empty because its best row was long. The recall tool, the routed path
-    and the eval all pack with this function, so the measured context is the
-    shipped one.
+    kept cut to the cap, so a result is never empty because its best row was
+    long. Without ``truncate`` nothing is cut.
+
+    An item for which ``cut_now`` is true (a segment judged in beside a head of
+    facts, :func:`is_judged_in`) that does not fit whole is cut to the room
+    left at the point it is reached, when at least ``min_cut`` remains, rather
+    than skipped: skipped, the short rows after it filled the room and a
+    segment judged relevant never reached the context. The recall tool, the
+    routed path and the eval all pack with this function, so the measured
+    context is the shipped one.
     """
     if cap is None:
         return list(items)
-    kept: list[_T] = []
+    kept: list[tuple[int, _T]] = []
     used = 0
+    skipped: int | None = None
     for index, item in enumerate(items):
         n = size(item)
         if used + n > cap:
+            room = cap - used
             if index == 0 and truncate is not None and cap > 0:
                 cut = truncate(item, cap)
                 if 0 < size(cut) <= cap:
-                    kept.append(cut)
+                    kept.append((index, cut))
                     used += size(cut)
+            elif (
+                cut_now is not None
+                and truncate is not None
+                and cut_now(item)
+                and room >= max(1, min_cut)
+            ):
+                cut = truncate(item, room)
+                if 0 < size(cut) <= room:
+                    kept.append((index, cut))
+                    used += size(cut)
+                elif skipped is None:
+                    skipped = index
+            elif skipped is None:
+                skipped = index
             continue
-        kept.append(item)
+        kept.append((index, item))
         used += n
-    return kept
+    room = cap - used
+    if truncate is not None and skipped is not None and room >= max(1, min_cut):
+        cut = truncate(items[skipped], room)
+        if 0 < size(cut) <= room:
+            kept.append((skipped, cut))
+            kept.sort(key=lambda pair: pair[0])
+    return [item for _, item in kept]
 
 
 def row_chars(row: dict[str, Any]) -> int:
@@ -143,9 +196,15 @@ def truncate_row(row: dict[str, Any], limit: int) -> dict[str, Any]:
     return out
 
 
+def is_judged_in(row: Mapping[str, Any]) -> bool:
+    """Whether ``row`` is a segment judged in beside a head of facts
+    (``facts._last_in_head``); packing cuts it to fit where it is reached."""
+    return bool(row.get("judged_in"))
+
+
 def within_context_cap(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rows in order packed into ``RECALL_CONTEXT_CHARS`` by :func:`pack_within`."""
-    return pack_within(rows, RECALL_CONTEXT_CHARS, row_chars, truncate_row)
+    """Rows in order packed into :func:`recall_context_chars` by :func:`pack_within`."""
+    return pack_within(rows, recall_context_chars(), row_chars, truncate_row, cut_now=is_judged_in)
 
 
 @dataclass
@@ -341,7 +400,7 @@ def apply_reserved(
     ``n`` rows in the top ``limit`` came from that leg, the missing ones are
     taken from ``pool`` in the order of that leg's own ``leg_scores`` (then its
     rank), and they replace the lowest-ranked rows that do not themselves hold
-    a reserved place. A leg in :data:`BEST_ROW_LEGS` (the graph) keeps its
+    a reserved place and are not marked ``judged_in``. A leg in :data:`BEST_ROW_LEGS` (the graph) keeps its
     best ``n`` rows instead: another of its rows that the head holds anyway
     uses up no place, and the missing ones are added *after* the head,
     evicting nothing. The result is then up to ``limit`` + that leg's ``n``
@@ -355,7 +414,9 @@ def apply_reserved(
     ``limit`` 1 or 2.
     """
     out = list(ranked[:limit])
-    protected: set[tuple[Any, Any]] = set()
+    # A row the reranker judged in beside the head (``judged_in``) sits last
+    # by rule, not by score, so it is never the row a pick replaces.
+    protected: set[tuple[Any, Any]] = {_row_key(r) for r in out if r.get("judged_in")}
     picks: list[dict[str, Any]] = []
     # The graph's rows (BEST_ROW_LEGS) go after the head and evict nothing.
     appended: list[dict[str, Any]] = []

@@ -1262,6 +1262,15 @@ class EngineSettings(SettingsGroup):
         "ROBOTHOR_MEMORY_BLOCK_MAX_CHARS",
         "Character ceiling on one agent memory block before it is compacted.",
     )
+    recall_context_chars: int = declare(
+        4000,
+        "ROBOTHOR_MEMORY_RECALL_CONTEXT_CHARS",
+        "Characters of memory text one recall returns: the search_memory tool, the "
+        "routed recall and MCP search_memory pack their rows into it, best first. "
+        "Read once per process.",
+        restart_units=("robothor-engine", "robothor-bridge"),
+        since="unreleased",
+    )
     importance_threshold: float = declare(
         0.3,
         "ROBOTHOR_IMPORTANCE_THRESHOLD",

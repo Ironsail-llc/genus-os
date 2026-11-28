@@ -1632,6 +1632,52 @@ async def _auxiliary_legs(
     return legs
 
 
+def _segment_to_judge(pool: list[dict[str, Any]], head: int) -> dict[str, Any] | None:
+    """The best conversation segment, when the reranker's head holds none.
+
+    The reranker scores only the first ``head`` rows of the fused pool. A
+    question about a subject many extracted facts name fills that head with
+    facts found by both fact legs, and the segment that holds the answer
+    fuses below it and is never judged. Then the first segment of the pool
+    (the one its own legs rank best) is judged beside the head; it is kept
+    only when the reranker scores it relevant (``_rank_pool``). ``None`` when
+    the head already holds a segment, or no segment fused past it.
+    """
+    if head <= 0 or len(pool) <= head:
+        return None
+    if any(r.get("kind") == "segment" for r in pool[:head]):
+        return None
+    return next((r for r in pool[head:] if r.get("kind") == "segment"), None)
+
+
+def _last_in_head(
+    ranked: list[dict[str, Any]], key: tuple[str, Any] | None
+) -> list[dict[str, Any]]:
+    """``ranked`` with the judged segment ``key`` moved to its last place.
+
+    A segment judged in beside a head of facts takes the head's last place,
+    whatever its score: read first, it made the answer model abstain on the
+    memory evaluation's world. Its fused rank, the other place it has, is
+    past every row the head holds (that is when it is judged) and so past
+    what the context can hold. The row is marked ``judged_in`` so that
+    ``apply_reserved`` does not hand its place to a reserved pick.
+    """
+    if key is None:
+        return ranked
+    rows = [r for r in ranked if (r.get("kind"), r.get("id")) != key]
+    moved = [r for r in ranked if (r.get("kind"), r.get("id")) == key]
+    for r in moved:
+        r["judged_in"] = True
+    return [*rows, *moved]
+
+
+def _judged_relevant(row: dict[str, Any]) -> bool:
+    from robothor.rag.reranker import RELEVANT_SCORE
+
+    score = row.get("rerank_score")
+    return score is not None and float(score) >= RELEVANT_SCORE
+
+
 async def _rank_pool(
     query: str, pool: list[dict[str, Any]], limit: int, use_reranker: bool
 ) -> list[dict[str, Any]]:
@@ -1641,15 +1687,40 @@ async def _rank_pool(
         try:
             import time
 
-            from robothor.rag.reranker import rerank_with_fallback
+            from robothor.rag.reranker import rerank_with_fallback, scored_head_size
 
             t0 = time.time()
             # WS-1: with MEMORY_RERANK_WIDE the reranker keeps a wider survivor
             # pool and the blend makes the final cut.
             rerank_topk = max(limit * 4, 24) if _rerank_wide_enabled() else limit
-            reranked: list[dict[str, Any]] = await rerank_with_fallback(
-                query, pool, top_k=rerank_topk
-            )
+            head = scored_head_size()
+            judge = _segment_to_judge(pool, head)
+            kept: tuple[str, Any] | None = None
+            if judge is None:
+                reranked: list[dict[str, Any]] = await rerank_with_fallback(
+                    query, pool, top_k=rerank_topk
+                )
+            else:
+                # One more pair: the head as always, then the segment. Judged
+                # relevant, it takes one of the head's places; otherwise it
+                # is dropped and the result is what it is without it.
+                key = ("segment", judge.get("id"))
+                ordered = [*pool[:head], judge, *(r for r in pool[head:] if r is not judge)]
+                scored = await rerank_with_fallback(
+                    query, ordered, top_k=rerank_topk + 1, max_candidates=head + 1
+                )
+                if not any(r.get("rerank_score") is not None for r in scored):
+                    # Unavailable, or every pair failed: nothing was judged,
+                    # so the fused order stands exactly as without the rule.
+                    reranked = pool[:rerank_topk]
+                else:
+                    reranked = [
+                        r
+                        for r in scored
+                        if (r.get("kind"), r.get("id")) != key or _judged_relevant(r)
+                    ][:rerank_topk]
+                    if any((r.get("kind"), r.get("id")) == key for r in reranked):
+                        kept = key
             logger.info(
                 "search_facts rerank: %d candidates → %d survivors (top_k=%d) in %dms",
                 len(pool),
@@ -1658,9 +1729,9 @@ async def _rank_pool(
                 int((time.time() - t0) * 1000),
             )
             if blend:
-                return _blend_rank(reranked, limit)
+                return _last_in_head(_blend_rank(reranked, limit), kept)
             _assign_relevance(reranked)
-            return reranked[:limit]
+            return _last_in_head(reranked[:limit], kept)
         except Exception as e:
             logger.warning("search_facts rerank failed, falling back: %s", e)
     if blend:
@@ -1776,8 +1847,10 @@ async def search_facts(
            max(30, limit * 3).
         2. ``fuse`` — reciprocal rank fusion, k=60, ``LEG_WEIGHTS``.
         3. Reranker (on by default; ``MEMORY_RERANK_ENABLED``) scores the head
-           of the fused list on 0..1 and orders by that score; on any error the
-           fused order stands.
+           of the fused list on 0..1 and orders by that score; when the head
+           holds no segment, the best segment is scored as one more pair
+           and, judged relevant, takes the head's last place. On any error
+           the fused order stands.
         4. Blend — relevance (rerank score, else from fused rank) + recency +
            importance + access, supersession demotion; near-duplicates dropped.
         5. ``RESERVED_PLACES`` — a leg keeps its reserved places; the graph's

@@ -488,6 +488,9 @@ class TestHedges:
 
 
 class TestValidationPerKind:
+    # The full world is generated and every planted answer judged: seconds on a
+    # workstation, close to the suite's 30 s default on a loaded CI runner.
+    @pytest.mark.timeout(180)
     @pytest.mark.asyncio
     async def test_a_mediocre_llm_judge_fails_even_when_the_pool_passes(self):
         """750 rule-settled wrong answers must not carry a weak model judge."""
@@ -574,6 +577,7 @@ class TestPlantedLlmWrongAnswersAreFair:
     single letter, and the real judge, reasonably, called one a spelling of the
     other."""
 
+    @pytest.mark.timeout(180)  # the full world, as above
     @pytest.mark.parametrize("size", ["small", "full"])
     def test_no_wrong_llm_answer_shares_or_nearly_spells_a_gold_word(self, size):
         from difflib import SequenceMatcher

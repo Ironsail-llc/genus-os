@@ -92,6 +92,8 @@ different `PYTHONHASHSEED` values.
 | CRM people / companies | ~42 / 7 | ~218 / 23 |
 | Documents (of which planted, untrusted) | 17 (3) | 78 (12) |
 | Conversations / sessions / turns | 3 / ~170 / ~1,000 | 12 / ~920 / ~6,500 |
+| `conversation_recall` conversations / sessions / turns | 6 / 24 / 192 | 40 / 160 / 1,280 |
+| `conversation_buried` companies / facts / conversations / sessions | 4 / 400 / 4 / 12 | 50 / 5,000 / 50 / 150 |
 | Transcript-only details | 24 | ~240 |
 | Shadow tenant people (names shared with primary) | 16 (10) | 100 (~80) |
 
@@ -140,6 +142,8 @@ Each stratum has at least 150 cases at full size, capped at 240 per stratum.
 | `long_tenure` | Current home, with `history_length` from 1 to 8 | City | Gold ranks first |
 | `cross_tenant` | Employer, city or manager of a person whose name also exists in the shadow tenant | Primary tenant's value | Any gold in top-k and no `forbidden` value in top-k |
 | `multi_hop_paraphrase` | The `multi_hop` cases reworded (`PARAPHRASES`, one of three wordings per kind) so the question shares no content word with its supporting facts except the names | As `multi_hop` | Any gold in top-k |
+| `conversation_recall` | A detail said only in a long multi-session conversation: `near` (beside the question's words in a long message), `far` (over 1,200 characters from them), `update` (changed in a later session) or `multi_session` (the lowest of three prices, one per session) | The detail | Any gold in top-k |
+| `conversation_buried` | A detail said only in a company's conversation, while about a hundred extracted facts name the company: `near`, `far`, or `update` (the conversation changed a value an active fact still states) | The detail | Any gold in top-k |
 
 Every `multi_hop` question shares its one rare word with the second-hop fact
 ("headquartered", "report to"), so a retriever that matches words can look
@@ -153,6 +157,41 @@ rewords. `multi_hop` is kept as it was, so earlier numbers still compare; the
 close. Abstention cases are reported as `unscored` until the answer-and-judge
 arm exists.
 
+`conversation_recall` exists because the world's own transcripts are short:
+one detail per exchange, so a `raw_detail` answer is in a segment of a few
+hundred characters next to the question's words, and no question needed a
+long segment, a later session or several sessions. Each of its conversations
+(`cvr-01` ...) is a shop fit-out talked through over four sessions; each
+session is one pasted note of about 1,500 characters and three short
+exchanges, about 2,400 characters in all. Session 1 gives the dock door and a
+shelving price, session 2 an order reference and a second price, session 3 a
+gate code more than 1,200 characters after the words that ask for it, and
+session 4 the new dock door and the third price. None of it is a fact: the
+answers exist only as conversation, seeded as every world conversation is
+(`save_exchange`, then `segments.index_conversation`). The stratum has its
+own random stream and comes last in `STRATA`, so every other stratum's cases,
+every fact and the original conversations are byte for byte what they were;
+`test_eval_world_conversation_recall.py` pins their digests. Full size has
+160 cases, 40 or more in each split, and it is not in the `hard` pool.
+
+`conversation_buried` exists because in `conversation_recall` nothing else
+names the shop, so its conversation reaches the context unopposed. In a real
+history the subject of a question is usually named by many extracted facts,
+and those facts, found by both fact legs, fill the reranker's head and the
+context before any conversation. Each of its 50 companies (`org-cvb-01` ...,
+names from word lists no other world text uses) is named by 100 facts: its
+headquarters, the dock door deliveries go to, and 98 distinct deliveries,
+invoices, inspections and meetings, no two near-duplicates by recall's own
+rule. Its one conversation (`cvb-01` ...) has three sessions after every one
+of those facts: an order reference beside the question's words, a gate code
+more than 1,200 characters after them, and a new dock door that replaces the
+one the active fact still states (so the old door is a rival, judged wrong).
+Its own random stream, after `conversation_recall`, so every earlier case,
+fact and conversation is byte for byte what it was (both test files pin
+their digests). Full size has 150 cases, 40 or more in each split, and it is
+not in the `hard` pool. On the base ranking, the answer was in the context
+for 1 of the 40 dev cases.
+
 ## Split rule
 
 `split_for(case_id)` returns `dev` when the first byte of
@@ -162,7 +201,7 @@ case keeps its split across seeds, sizes and code changes for as long as its
 id stays the same. The split is about 50/50, and the tests check that it stays
 between 40% and 60%.
 
-## Fixture schema (`WORLD_SCHEMA_VERSION = 1`)
+## Fixture schema (`WORLD_SCHEMA_VERSION = 3`)
 
 All types are frozen dataclasses in `robothor/memory/eval_world.py`. Dates are
 ISO strings (`YYYY-MM-DD`), turn times are ISO timestamps in UTC, and sequences
@@ -180,6 +219,8 @@ World
   raw_details, planted_claims
   cases                                   # empty in the shadow world
   shadow: World | None                    # the second tenant
+  conversation_recall                     # () in the shadow world (version 2)
+  conversation_buried                     # () in the shadow world (version 3)
 
 Person        id "per-0001", first_name, last_name, full_name, nickname | None,
               initials "A.V.", email "first.last@example.com", is_hub, has_crm_row
@@ -216,6 +257,11 @@ Conversation  id "cnv-01", title, sessions:
               # turns alternate user, assistant
 RawDetail     id "raw-0001", person_id, kind (pet|parking|desk|locker), value,
               turn_id, question
+ConversationRecall id "cvr-01:far", conversation_id "cvr-01",
+              kind (near|far|update|multi_session), question, gold, rivals
+              (the superseded door; the two dearer suppliers), turn_ids
+              # conversation_buried uses the same type: id "cvb-01:far",
+              # kind (near|far|update), rivals (the door the fact still states)
 PlantedClaim  id "clm-001", document_id, fact_id, subject_id,
               relation (works_at|headquartered_in), claimed_object, true_object
 

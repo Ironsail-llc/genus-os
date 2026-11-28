@@ -106,10 +106,13 @@ MEMORY_RECALL_INSTRUCTION = (
     "conversation excerpt) helps answer it or is directly about it"
 )
 
-# Candidates scored per search. The pool arrives in fused (RRF) order, so pairs
-# past the cap were already ranked out by every leg; each pair is one
-# ~37 ms local generate call, serialised to the device's slot count. Scoring
-# all 30-60 fused candidates was 97% of search latency (measured 2026-08-24).
+# Candidates scored per search: the front of the pool, which arrives in fused
+# (RRF) order. A row past the cap is never scored, however well its own leg
+# ranked it: a row one leg found fuses below every row two legs found, so
+# search_facts has the best conversation segment judged as one more pair when
+# this head holds none (facts._segment_to_judge). Each pair is one ~37 ms local generate
+# call, serialised to the device's slot count. Scoring all 30-60 fused
+# candidates was 97% of search latency (measured 2026-08-24).
 # Env MEMORY_RERANK_MAX_CANDIDATES overrides; 0 disables the cap.
 RERANK_MAX_CANDIDATES = 16
 
@@ -125,6 +128,15 @@ def _max_candidates() -> int:
         return int(os.environ.get("MEMORY_RERANK_MAX_CANDIDATES", str(RERANK_MAX_CANDIDATES)))
     except ValueError:
         return RERANK_MAX_CANDIDATES
+
+
+#: The score at which a pair is judged relevant ("yes" in ``rerank_relevant``).
+RELEVANT_SCORE = 0.5
+
+
+def scored_head_size() -> int:
+    """How many candidates from the front of the input one rerank scores (0: all)."""
+    return _max_candidates()
 
 
 def build_reranker_prompt(
@@ -223,10 +235,12 @@ async def rerank(
     results: list[dict[str, Any]],
     top_k: int = 10,
     batch_size: int | None = None,
+    max_candidates: int | None = None,
 ) -> list[dict[str, Any]]:
     """Rerank candidates by the cross-encoder's graded score.
 
-    Scores the first ``RERANK_MAX_CANDIDATES`` (fused order) and returns the
+    Scores the first ``RERANK_MAX_CANDIDATES`` (fused order; ``max_candidates``
+    overrides it for one call) and returns the
     best ``top_k`` of them ordered by ``rerank_score`` alone — never re-sorted
     by cosine, so a candidate without a ``similarity`` (keyword-only, graph,
     episode) is ranked like any other. Equal scores keep the input order.
@@ -252,7 +266,8 @@ async def rerank(
             r["rerank_relevant"] = "skipped"
         return results[:top_k]
 
-    max_candidates = _max_candidates()
+    if max_candidates is None:
+        max_candidates = _max_candidates()
     if max_candidates > 0:
         results = results[:max_candidates]
 
@@ -274,7 +289,7 @@ async def rerank(
             for r, score in zip(batch, scores, strict=True):
                 r_copy = dict(r)
                 r_copy["rerank_score"] = float(score)
-                r_copy["rerank_relevant"] = "yes" if score >= 0.5 else "no"
+                r_copy["rerank_relevant"] = "yes" if score >= RELEVANT_SCORE else "no"
                 scored.append(r_copy)
 
     # sorted() is stable: equal scores keep the fused order.
@@ -291,10 +306,11 @@ async def rerank_with_fallback(
     query: str,
     results: list[dict[str, Any]],
     top_k: int = 10,
+    max_candidates: int | None = None,
 ) -> list[dict[str, Any]]:
     """Rerank; on any reranker error return the input (fused) order, cut to top_k."""
     try:
-        return await rerank(query, results, top_k=top_k)
+        return await rerank(query, results, top_k=top_k, max_candidates=max_candidates)
     except Exception:
         return results[:top_k]
 

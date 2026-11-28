@@ -1,8 +1,8 @@
 """The recall-leg contract: any number of named legs, one fusion, reserved places.
 
 A recall leg is anything that turns a query into a ranked list of
-``Candidate`` objects — the vector and keyword legs over facts today, raw
-conversation segments and graph activation tomorrow. ``fuse`` merges them by
+``Candidate`` objects — the vector and keyword legs over facts, conversation
+segments, graph activation. ``fuse`` merges them by
 reciprocal rank, and ``apply_reserved`` guarantees a leg a number of places in
 the final top-k. The second matters because a multi-hop (graph) fact is by
 definition not similar to the query, so a query-document reranker will
@@ -378,3 +378,39 @@ class TestReservedPlacesNeverTakeTheHead:
             picked = [r for r in out if "entity_expansion" in r["leg_ranks"]]
             assert len(out) <= limit and len(picked) <= (limit - 1) // 2, limit
             assert out[0]["id"] == ranked[0]["id"], limit
+
+
+class TestJudgedRowKeepsItsPlace:
+    """A row the reranker judged in is not the one a reserved pick evicts."""
+
+    @staticmethod
+    def _row(i: int, **extra: object) -> dict[str, object]:
+        return {"id": i, "kind": "fact", "leg_ranks": {"vector": i}, **extra}
+
+    def test_a_reserved_pick_evicts_the_row_above_a_judged_row(self) -> None:
+        judged = {"id": 99, "kind": "segment", "leg_ranks": {"segment": 0}, "judged_in": True}
+        ranked = [*(self._row(i) for i in range(5)), judged]
+        pick = {
+            "id": 50,
+            "kind": "fact",
+            "leg_ranks": {"entity_expansion": 0},
+            "leg_scores": {"entity_expansion": 1.0},
+        }
+        out = apply_reserved(ranked, [*ranked, pick], 6, {"entity_expansion": 1})
+
+        ids = [r["id"] for r in out]
+        assert 99 in ids, "the judged segment was evicted by the reserved pick"
+        assert 50 in ids
+        assert 4 not in ids, "the lowest unjudged row gives up its place instead"
+        assert len(out) == 6
+
+    def test_without_a_judged_row_the_last_row_is_still_the_victim(self) -> None:
+        ranked = [self._row(i) for i in range(6)]
+        pick = {
+            "id": 50,
+            "kind": "fact",
+            "leg_ranks": {"entity_expansion": 0},
+            "leg_scores": {"entity_expansion": 1.0},
+        }
+        out = apply_reserved(ranked, [*ranked, pick], 6, {"entity_expansion": 1})
+        assert [r["id"] for r in out] == [0, 1, 2, 3, 4, 50]
