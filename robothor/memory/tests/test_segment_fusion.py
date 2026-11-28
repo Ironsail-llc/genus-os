@@ -140,7 +140,11 @@ async def test_an_answer_segment_buried_under_two_leg_facts_is_returned_when_rel
     env: pytest.MonkeyPatch,
 ) -> None:
     """100 facts found by both fact legs fill the reranker's head; the best
-    segment is judged beside them and, judged relevant, comes back first."""
+    segment is judged beside them and, judged relevant, takes the head's last
+    place: never first, whatever its score (read first, it made the answer
+    model abstain on the memory evaluation's world), and never after the
+    head, where its fused rank (past every row the head holds) would put it
+    beyond what the context can hold."""
     seg_cur = _both_legs(_segment_row(9001, ANSWER))
     seen, pair = _recording({"4417": 0.95})
     with patch.object(reranker, "rerank_pair", pair):
@@ -150,7 +154,10 @@ async def test_an_answer_segment_buried_under_two_leg_facts_is_returned_when_rel
     hits = _scored(rows)
     assert hits and "4417" in hits[0]["fact_text"], [r.get("kind") for r in rows]
     assert hits[0]["rerank_score"] == pytest.approx(0.95)
-    assert rows[0]["kind"] == "segment"
+    head = [r for r in rows if r.get("rerank_score") is not None]
+    assert head[-1]["kind"] == "segment", [r["kind"] for r in head]
+    assert rows.index(head[-1]) == len(head) - 1
+    assert rows[0]["kind"] == "fact"
 
 
 @pytest.mark.asyncio
@@ -209,7 +216,7 @@ async def test_no_extra_pair_when_the_head_already_holds_a_segment(
         rows = await _search_with_segments(_Cursor(vector=facts, keyword=[]), seg_cur, limit=10)
 
     assert len(seen) == reranker.RERANK_MAX_CANDIDATES
-    assert rows[0]["kind"] == "segment"
+    assert rows[0]["kind"] == "segment", "a segment the head held anyway keeps its rank"
 
 
 @pytest.mark.asyncio
