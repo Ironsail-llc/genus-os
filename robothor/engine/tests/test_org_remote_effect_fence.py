@@ -105,3 +105,46 @@ def test_a_reworded_retry_of_the_same_remote_write_is_held(effect_db, reworded) 
 
     with pytest.raises(effects.EffectPendingError):
         _begin(ctx, reworded)
+
+
+def test_a_held_remote_write_leaves_one_home_audit_row(effect_db) -> None:
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from robothor.engine.runtime import effect_dispatch
+
+    ctx = context()
+    _uncertain(ctx, _args())
+    later = _later(ctx)
+    tool_ctx = type(
+        "Ctx",
+        (),
+        {
+            "tenant_id": later.tenant_id,
+            "run_id": "worker",
+            "agent_id": "main",
+            "user_id": later.principal_id,
+            "is_benchmark": False,
+        },
+    )()
+    dispatch = AsyncMock()
+    with (
+        patch.object(effect_dispatch, "active_context", MagicMock(get=lambda: later)),
+        patch("robothor.engine.tools.cross_tenant.audit_cross_tenant") as audit,
+        patch("robothor.engine.tools.dispatch._runtime_denial", AsyncMock(return_value=None)),
+    ):
+        import asyncio
+
+        result = asyncio.run(
+            effect_dispatch.invoke(TOOL, _args(args={"name": "reworded"}), tool_ctx, dispatch)
+        )
+
+    dispatch.assert_not_awaited()
+    assert result["not_sent"] is True
+    audit.assert_called_once()
+    kw = audit.call_args.kwargs
+    assert (kw["outcome"], kw["code"], kw["remote_tool"]) == (
+        "denied",
+        "held_uncertain",
+        "example_write",
+    )
+    assert kw["held"]["digest"] and SECRET not in repr(kw)
