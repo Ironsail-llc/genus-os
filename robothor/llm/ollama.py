@@ -73,6 +73,39 @@ EMBED_BACKOFF_FACTOR = 3.0
 EMBED_BACKOFF_CAP_SECONDS = 45.0
 EMBED_BACKOFF_JITTER_FRACTION = 0.25
 
+#: The width of every ``embedding`` column (``vector(1024)`` in the migrations).
+#: A vector of any other width, empty included, can never be stored or searched.
+EMBEDDING_DIMENSIONS = 1024
+#: Calls made before an empty or mis-sized vector becomes an error: one retry.
+EMBED_SHAPE_ATTEMPTS = 2
+
+
+class InvalidEmbeddingError(httpx.HTTPError):
+    """The embedding server answered, but not with a usable vector.
+
+    An ``httpx.HTTPError`` on purpose: every caller that already treats an
+    unreachable embedding service as degraded (keyword-only search, no
+    insights, a structured tool error) treats this the same way, instead of
+    passing the vector on to fail in SQL as a pgvector dimension mismatch.
+    """
+
+    def __init__(self, model: str, got: int, expected: int = EMBEDDING_DIMENSIONS) -> None:
+        self.model = model
+        self.got = got
+        self.expected = expected
+        super().__init__(
+            f"embedding model {model!r} returned a {got}-dimension vector, expected {expected}"
+        )
+
+
+def _vector_width_problem(vector: Any) -> int | None:
+    """The width of an unusable vector, or ``None`` when it is usable."""
+    if not isinstance(vector, list):
+        return 0
+    if len(vector) != EMBEDDING_DIMENSIONS:
+        return len(vector)
+    return None
+
 
 class _TimedClient:
     """The shared pooled client, with this call's timeout on every request.
@@ -565,9 +598,35 @@ async def analyze_image(
 async def get_embedding_async(
     text: str, model: str | None = None, max_retries: int = EMBED_MAX_ATTEMPTS
 ) -> list[float]:
-    """Get embedding vector via Ollama (async version) with retry."""
+    """Get embedding vector via Ollama (async version) with retry.
+
+    Transport failures are retried with backoff up to ``max_retries``. A reply
+    whose vector is empty or not ``EMBEDDING_DIMENSIONS`` wide is retried once,
+    then raises :class:`InvalidEmbeddingError`.
+    """
+    model_name = model or _embedding_model()
+    got = 0
+    for shape_attempt in range(EMBED_SHAPE_ATTEMPTS):
+        vector = await _embed_single_call(text, model_name, max_retries)
+        problem = _vector_width_problem(vector)
+        if problem is None:
+            return vector
+        got = problem
+        if shape_attempt < EMBED_SHAPE_ATTEMPTS - 1:
+            logger.warning(
+                "Embedding model %s returned a %d-dimension vector, expected %d (retrying)",
+                model_name,
+                got,
+                EMBEDDING_DIMENSIONS,
+            )
+            await asyncio.sleep(_embed_backoff_seconds(0))
+    raise InvalidEmbeddingError(model_name, got)
+
+
+async def _embed_single_call(text: str, model_name: str, max_retries: int) -> list[float]:
+    """One embed request, retried across transport failures; the vector unchecked."""
     payload = {
-        "model": model or _embedding_model(),
+        "model": model_name,
         "input": text,
         "keep_alive": _keep_alive_for("embedding"),
     }
@@ -578,8 +637,9 @@ async def get_embedding_async(
             async with _client(30.0) as client:
                 resp = await client.post(f"{url}/api/embed", json=payload)
                 resp.raise_for_status()
-                embeddings: list[float] = resp.json()["embeddings"][0]
-                return embeddings
+                vectors = resp.json().get("embeddings") or []
+                embedding: list[float] = vectors[0] if vectors else []
+                return embedding
         except (httpx.HTTPStatusError, *_RETRYABLE_TRANSPORT_ERRORS) as e:
             if not _is_retryable_embed_error(e):
                 raise
@@ -620,6 +680,11 @@ async def get_embeddings_batch_async(
 
     Returns:
         List of embedding vectors (one per input text).
+
+    Raises:
+        InvalidEmbeddingError: a text's vector stayed empty or not
+            ``EMBEDDING_DIMENSIONS`` wide after the batch was retried once and
+            the text was then asked for alone.
     """
     if not texts:
         return []
@@ -627,8 +692,46 @@ async def get_embeddings_batch_async(
         emb = await get_embedding_async(texts[0], model=model)
         return [emb]
 
+    model_name = model or _embedding_model()
+    for shape_attempt in range(EMBED_SHAPE_ATTEMPTS):
+        embeddings = await _embed_batch_call(texts, model_name)
+        if embeddings is None:
+            break  # The batch call failed or miscounted — fall through to sequential
+        problems = [p for p in map(_vector_width_problem, embeddings) if p is not None]
+        if not problems:
+            logger.info("batch embed: %d texts in one call", len(texts))
+            return embeddings
+        last = shape_attempt == EMBED_SHAPE_ATTEMPTS - 1
+        logger.warning(
+            "Batch embed: model %s returned %d unusable vector(s) (a %d-dimension one, "
+            "expected %d) — %s",
+            model_name,
+            len(problems),
+            problems[0],
+            EMBEDDING_DIMENSIONS,
+            "asking for each text alone" if last else "retrying",
+        )
+        if not last:
+            await asyncio.sleep(_embed_backoff_seconds(0))
+
+    # A batch that stays bad must not cost the good vectors in it: each text is
+    # asked alone, so only a text whose own vector stays unusable raises.
+    # Fallback: sequential single-text calls, each validated the same way
+    results = []
+    for text in texts:
+        emb = await get_embedding_async(text, model=model_name)
+        results.append(emb)
+    return results
+
+
+async def _embed_batch_call(texts: list[str], model_name: str) -> list[list[float]] | None:
+    """One batch embed request, retried across transport failures.
+
+    Returns the vectors unchecked, or ``None`` when the caller should fall back
+    to one call per text (a wrong count, or a failure that outlasted retries).
+    """
     payload = {
-        "model": model or _embedding_model(),
+        "model": model_name,
         "input": texts,
         "keep_alive": _keep_alive_for("embedding"),
     }
@@ -641,7 +744,6 @@ async def get_embeddings_batch_async(
                 resp.raise_for_status()
                 embeddings: list[list[float]] = resp.json()["embeddings"]
                 if len(embeddings) == len(texts):
-                    logger.info("batch embed: %d texts in one call", len(texts))
                     return embeddings
                 logger.warning(
                     "batch embed returned %d embeddings for %d texts, falling back",
@@ -680,13 +782,7 @@ async def get_embeddings_batch_async(
             EMBED_MAX_ATTEMPTS,
             last_error,
         )
-
-    # Fallback: sequential single-text calls
-    results = []
-    for text in texts:
-        emb = await get_embedding_async(text, model=model)
-        results.append(emb)
-    return results
+    return None
 
 
 #: Substrings that mark a model as an embedder or a reranker rather than

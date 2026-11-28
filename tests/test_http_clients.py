@@ -144,7 +144,7 @@ def _ollama_transport(seen: list[httpx.Request]) -> httpx.MockTransport:
         seen.append(request)
         path = request.url.path
         if path == "/api/embed":
-            return httpx.Response(200, json={"embeddings": [[0.1, 0.2, 0.3]]})
+            return httpx.Response(200, json={"embeddings": [[0.1] * 1024]})
         if path == "/api/tags":
             return httpx.Response(200, json={"models": [{"name": "qwen3:8b"}]})
         return httpx.Response(
