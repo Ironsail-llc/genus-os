@@ -891,6 +891,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Append each judged case to this JSONL; rerunning with it resumes",
     )
     memeval_parser.add_argument(
+        "--extraction",
+        action="store_true",
+        help="Measure conversation fact extraction on the labelled set (no database)",
+    )
+    memeval_parser.add_argument(
+        "--fixtures",
+        default="docs/benchmarks/memory/conversation-facts.yaml",
+        help="With --extraction: the labelled conversations",
+    )
+    memeval_parser.add_argument(
+        "--extraction-model",
+        default=None,
+        help="With --extraction: the local model that extracts (default: the generation model)",
+    )
+    memeval_parser.add_argument(
         "--record-baseline",
         action="store_true",
         help="Also write the report as the recorded world baseline under docs/benchmarks/memory/",

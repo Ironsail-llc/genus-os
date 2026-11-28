@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from robothor.memory.eval import (
     EVAL_TENANT,
@@ -23,6 +23,7 @@ from robothor.memory.eval import (
     run_suite,
 )
 from robothor.memory.eval_answer import format_answers_markdown, run_answers
+from robothor.memory.eval_extraction import format_extraction_markdown, run_extraction_eval
 from robothor.memory.eval_world_seed import WORLD_TENANT, format_world_report, run_world
 
 if TYPE_CHECKING:
@@ -42,6 +43,11 @@ def cmd_memory_eval(args: argparse.Namespace) -> int:
     eval sit broken behind row-level security while still looking like an
     ordinary failing test.
     """
+    if getattr(args, "extraction", False):
+        if getattr(args, "world", False) or getattr(args, "answers", False):
+            print("memory-eval cannot run: --extraction runs on its own, not with --world")
+            return 3
+        return _cmd_extraction(args)
     if getattr(args, "answers", False):
         if not getattr(args, "world", False):
             print("memory-eval cannot run: --answers needs --world")
@@ -223,4 +229,52 @@ def _cmd_answers(args: argparse.Namespace) -> int:
         )
         (BASELINE_DIR / "world-baseline.md").write_text(markdown, encoding="utf-8")
         print(f"recorded baseline under {BASELINE_DIR}")
+    return 0
+
+
+def _write_report(report: dict[str, Any], markdown: str, report_path: str | None) -> None:
+    """The JSON report and its Markdown summary to ``report_path``, or stdout."""
+    import json
+
+    payload = json.dumps(report, indent=2, default=str)
+    if report_path:
+        path = Path(report_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(payload + "\n", encoding="utf-8")
+        path.with_suffix(".md").write_text(markdown, encoding="utf-8")
+        print(markdown)
+        print(f"report: {path} (summary: {path.with_suffix('.md')})")
+    else:
+        print(payload)
+        print("\n<!-- markdown -->\n")
+        print(markdown)
+
+
+def _cmd_extraction(args: argparse.Namespace) -> int:
+    """Measure conversation fact extraction on the labelled set.
+
+    No database and no tenant: the real extraction is a model call and a
+    parse, scored against hand labels by the validated judge. Exit 0 when it
+    ran, 3 when it could not (labels invalid, the judge failed validation, or a
+    named model that remote generation would ignore). Never recorded to
+    benchmark_results.
+    """
+    fixtures = Path(args.fixtures)
+    if not fixtures.exists():
+        print(f"Fixtures not found: {fixtures}")
+        return 3
+    try:
+        report = asyncio.run(
+            run_extraction_eval(
+                fixtures,
+                model=args.extraction_model,
+                judge_model=args.judge_model,
+                repeats=args.repeats,
+                concurrency=args.concurrency,
+            )
+        )
+    except (EvalPreconditionError, ValueError) as e:
+        print(f"memory-eval cannot run: {e}")
+        return 3
+    _write_report(report, format_extraction_markdown(report), args.report)
     return 0

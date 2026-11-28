@@ -70,6 +70,8 @@ def stubs(monkeypatch):
 
     monkeypatch.setattr(cli, "run_extraction_eval", fake_run)
     monkeypatch.setattr(cli, "preflight", no_db)
+    # The summary's own content is the harness's test; here only that it is written.
+    monkeypatch.setattr(cli, "format_extraction_markdown", lambda r: f"## {r['model']}\n")
     return seen
 
 
