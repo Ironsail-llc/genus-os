@@ -845,16 +845,33 @@ Usage: `genus legacy-goal remove-target <target_id> [--json]`
 
 Run the memory retrieval benchmark suite.
 
-Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [--record] [--triggered-by TRIGGERED_BY]`
+Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [--record] [--triggered-by TRIGGERED_BY] [--world] [--world-seed WORLD_SEED] [--world-size WORLD_SIZE] [--split SPLIT] [--answers] [--systems SYSTEMS] [--reference REFERENCE] [--token-budget TOKEN_BUDGET] [--repeats REPEATS] [--answer-model ANSWER_MODEL] [--judge-model JUDGE_MODEL] [--limit-per-stratum LIMIT_PER_STRATUM] [--concurrency CONCURRENCY] [--cache-dir CACHE_DIR] [--report REPORT] [--progress PROGRESS] [--record-baseline]`
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--suite` | `SUITE` | `docs/benchmarks/memory/suite.yaml` | Path to the eval suite YAML |
-| `--tenant` | `TENANT` | — | Isolated eval tenant (default: memory-eval) |
+| `--tenant` | `TENANT` | — | Isolated eval tenant (default: memory-eval; memory-eval-world with --world) |
 | `--keep` | — | off | Skip cleanup of seeded facts (debugging) |
 | `--json` | — | off | Output JSON |
 | `--record` | — | off | Write the result to benchmark_results so the fleet grader can see it |
 | `--triggered-by` | `TRIGGERED_BY` | `manual` | Provenance recorded alongside the result (e.g. cron) |
+| `--world` | — | off | Run the generated synthetic world instead of the suite file |
+| `--world-seed` | `WORLD_SEED` | `1` | Seed for the synthetic world (same seed, same world) |
+| `--world-size` | `small` \| `full` | `full` | Synthetic world size |
+| `--split` | `dev` \| `held_out` \| `all` | `dev` | Which world cases to score |
+| `--answers` | — | off | With --world: answer and judge each case per system instead of substring scoring |
+| `--systems` | `SYSTEMS` | `recall,recall_budget,keyword_only,raw_verbatim,full_context` | Comma-separated systems to compare (first is the system under test) |
+| `--reference` | `REFERENCE` | — | Reference system for the deciding comparison (default: keyword_only) |
+| `--token-budget` | `TOKEN_BUDGET` | `2048` | Context tokens every system may fill |
+| `--repeats` | `REPEATS` | `1` | Repeat the answer runs to measure spread |
+| `--answer-model` | `ANSWER_MODEL` | — | Model that answers (default: the generation model) |
+| `--judge-model` | `JUDGE_MODEL` | — | Model for answers the rule judge cannot settle |
+| `--limit-per-stratum` | `LIMIT_PER_STRATUM` | — | At most this many cases per stratum |
+| `--concurrency` | `CONCURRENCY` | `4` | Cases answered at once (model slots) |
+| `--cache-dir` | `CACHE_DIR` | — | Embedding cache directory (default: ~/.cache/...) |
+| `--report` | `REPORT` | — | Write the JSON report here and a .md summary beside it |
+| `--progress` | `PROGRESS` | — | Append each judged case to this JSONL; rerunning with it resumes |
+| `--record-baseline` | — | off | Also write the report as the recorded world baseline under docs/benchmarks/memory/ |
 
 ## `genus status`
 
