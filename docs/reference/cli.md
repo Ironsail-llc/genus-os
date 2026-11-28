@@ -845,16 +845,20 @@ Usage: `genus legacy-goal remove-target <target_id> [--json]`
 
 Run the memory retrieval benchmark suite.
 
-Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [--record] [--triggered-by TRIGGERED_BY]`
+Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [--record] [--triggered-by TRIGGERED_BY] [--world] [--world-seed WORLD_SEED] [--world-size WORLD_SIZE] [--split SPLIT]`
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--suite` | `SUITE` | `docs/benchmarks/memory/suite.yaml` | Path to the eval suite YAML |
-| `--tenant` | `TENANT` | — | Isolated eval tenant (default: memory-eval) |
+| `--tenant` | `TENANT` | — | Isolated eval tenant (default: memory-eval; memory-eval-world with --world) |
 | `--keep` | — | off | Skip cleanup of seeded facts (debugging) |
 | `--json` | — | off | Output JSON |
 | `--record` | — | off | Write the result to benchmark_results so the fleet grader can see it |
 | `--triggered-by` | `TRIGGERED_BY` | `manual` | Provenance recorded alongside the result (e.g. cron) |
+| `--world` | — | off | Run the generated synthetic world instead of the suite file |
+| `--world-seed` | `WORLD_SEED` | `1` | Seed for the synthetic world (same seed, same world) |
+| `--world-size` | `small` \| `full` | `full` | Synthetic world size |
+| `--split` | `dev` \| `held_out` \| `all` | `dev` | Which world cases to score |
 
 ## `genus status`
 
