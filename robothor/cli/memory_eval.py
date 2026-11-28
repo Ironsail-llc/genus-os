@@ -23,13 +23,22 @@ from robothor.memory.eval import (
     run_suite,
 )
 from robothor.memory.eval_answer import format_answers_markdown, run_answers
-from robothor.memory.eval_extraction import format_extraction_markdown, run_extraction_eval
+from robothor.memory.eval_extraction import (
+    compare_to_baseline,
+    format_extraction_markdown,
+    load_baseline,
+    run_extraction_eval,
+    write_baseline,
+)
 from robothor.memory.eval_world_seed import WORLD_TENANT, format_world_report, run_world
 
 if TYPE_CHECKING:
     import argparse
 
 _DEFAULT_SUITE = "docs/benchmarks/memory/suite.yaml"
+
+#: The extraction baseline's file name, beside the fixtures.
+BASELINE_NAME = "conversation-facts-baseline.yaml"
 
 #: Where --record-baseline writes the world answer-arm baseline.
 BASELINE_DIR = Path("docs/benchmarks/memory")
@@ -256,8 +265,12 @@ def _cmd_extraction(args: argparse.Namespace) -> int:
     No database and no tenant: the real extraction is a model call and a
     parse, scored against hand labels by the validated judge. Exit 0 when it
     ran, 3 when it could not (labels invalid, the judge failed validation, or a
-    named model that remote generation would ignore). Never recorded to
-    benchmark_results.
+    named model that remote generation would ignore, or a baseline for
+    another model or split). With ``--baseline`` the run is compared against
+    that recorded baseline and exits 2 when a metric regressed beyond its
+    tolerance; its PROPOSED thresholds are reported and never change the exit
+    code. ``--record-baseline`` writes this run as the baseline instead. Never
+    recorded to benchmark_results.
     """
     fixtures = Path(args.fixtures)
     if not fixtures.exists():
@@ -276,5 +289,23 @@ def _cmd_extraction(args: argparse.Namespace) -> int:
     except (EvalPreconditionError, ValueError) as e:
         print(f"memory-eval cannot run: {e}")
         return 3
+    baseline_path = getattr(args, "baseline", None)
+    if getattr(args, "record_baseline", False):
+        target = baseline_path or str(Path(args.fixtures).with_name(BASELINE_NAME))
+        write_baseline(target, report)
+        _write_report(report, format_extraction_markdown(report), args.report)
+        print(f"recorded baseline: {target}")
+        return 0
+    if baseline_path:
+        try:
+            report["baseline_comparison"] = compare_to_baseline(
+                report, load_baseline(baseline_path)
+            )
+        except (EvalPreconditionError, ValueError) as e:
+            print(f"memory-eval cannot compare: {e}")
+            return 3
     _write_report(report, format_extraction_markdown(report), args.report)
+    if report.get("baseline_comparison", {}).get("regressed"):
+        print("REGRESSED against the recorded baseline")
+        return 2
     return 0

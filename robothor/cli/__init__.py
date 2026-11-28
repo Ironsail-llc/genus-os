@@ -901,6 +901,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="With --extraction: the labelled conversations",
     )
     memeval_parser.add_argument(
+        "--baseline",
+        default=None,
+        help="With --extraction: compare against this recorded baseline; exit 2 on a regression",
+    )
+    memeval_parser.add_argument(
         "--extraction-model",
         default=None,
         help="With --extraction: the local model that extracts (default: the generation model)",
@@ -908,7 +913,8 @@ def _build_parser() -> argparse.ArgumentParser:
     memeval_parser.add_argument(
         "--record-baseline",
         action="store_true",
-        help="Also write the report as the recorded world baseline under docs/benchmarks/memory/",
+        help="Write the report as the recorded baseline (world: under docs/benchmarks/memory/; "
+        "extraction: to --baseline, or beside the fixtures)",
     )
 
     # memory-replay — read-only dry run: real questions, today's recall vs the new

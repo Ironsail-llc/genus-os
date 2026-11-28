@@ -479,6 +479,9 @@ class ExtractedOutcome:
     #: Stored as the user's, matched no label, and cites a turn carrying
     #: someone else's words: a possible misattribution, for a reader to check.
     from_third_party_turn: bool = False
+    #: Cites only guests' turns and still says "the user": a guest's claim
+    #: that would read as the owner's.
+    guest_as_user: bool = False
 
 
 @dataclass
@@ -513,12 +516,18 @@ async def score_conversation(
     by_turn = {t.ref: t for t in conv.turns}
     score = ConversationScore(conv.id, conv.category, repeat, error)
     for f in facts:
+        text = str(f.get("fact_text") or "")
+        turns = sorted(int(r) for r in f.get("turn_refs") or [])
+        cited = [by_turn[r] for r in turns if r in by_turn]
         score.extracted.append(
             ExtractedOutcome(
-                text=str(f.get("fact_text") or ""),
+                text=text,
                 trust=trust_of(f),
-                turns=sorted(int(r) for r in f.get("turn_refs") or []),
+                turns=turns,
                 event_time=f.get("event_time"),
+                guest_as_user=bool(cited)
+                and all(turn_speaker(t) not in ("user", "assistant") for t in cited)
+                and _contains(normalise(text), "the user"),
             )
         )
     for exp in conv.facts:
@@ -604,6 +613,11 @@ def _metrics(scores: Sequence[ConversationScore]) -> dict[str, Any]:
     details_ok, details_n = acc("details_ok", matched)
     hit = sum(e.matched for e in required)
     correct = sum(x.correct for x in extracted)
+    by_trust: dict[str, list[int]] = {}
+    for x in extracted:
+        pair = by_trust.setdefault(x.trust, [0, 0])
+        pair[0] += int(x.correct)
+        pair[1] += 1
     external = [e for s in scores for e in s.expected if e.external and e.matched]
     return {
         "conversations": len(scores),
@@ -614,6 +628,7 @@ def _metrics(scores: Sequence[ConversationScore]) -> dict[str, Any]:
         "correct_extracted": correct,
         "recall": _rate(hit, len(required)) or 0.0,
         "precision": _rate(correct, len(extracted)),
+        "precision_by_trust": by_trust,
         "trust_accuracy": _rate(trust_ok, trust_n),
         "speaker_accuracy": _rate(speaker_ok, speaker_n),
         "turn_accuracy": _rate(turns_ok, turns_n),
@@ -627,6 +642,7 @@ def _metrics(scores: Sequence[ConversationScore]) -> dict[str, Any]:
         "duplicates": sum(x.duplicate for x in extracted),
         "false_positives": len(extracted) - correct,
         "misattributed_to_operator": sum(s.misattributed for s in scores),
+        "guest_as_user": sum(x.guest_as_user for x in extracted),
         "third_party_matched": len(external),
         "possible_misattributions": sum(x.from_third_party_turn for x in extracted),
         "extraction_errors": sum(s.error is not None for s in scores),
@@ -829,14 +845,11 @@ async def _run_extraction_eval(
         for cat in CATEGORIES
         if any(s.category == cat for s in scores)
     }
-    per_repeat = [
-        {
-            k: v
-            for k, v in _metrics([s for s in scores if s.repeat == r]).items()
-            if k in ("recall", "precision", "trust_accuracy", "date_accuracy", "extracted")
-        }
-        for r in range(max(1, repeats))
-    ]
+    per_repeat = []
+    for r in range(max(1, repeats)):
+        part = _metrics([s for s in scores if s.repeat == r])
+        per_repeat.append({**comparable_metrics(part, repeats=1), "extracted": part["extracted"]})
+    metrics = _metrics(scores)
     return {
         "suite_id": SUITE_ID,
         "fixtures": str(path),
@@ -844,7 +857,8 @@ async def _run_extraction_eval(
         "judge_model": judge_name if llm is None else "injected",
         "conversations": len(conversations),
         "repeats": max(1, repeats),
-        "metrics": _metrics(scores),
+        "metrics": metrics,
+        "comparable": comparable_metrics(metrics, repeats=max(1, repeats)),
         "by_category": by_category,
         "per_repeat": per_repeat,
         "judge_validation": asdict(validation),
@@ -853,6 +867,180 @@ async def _run_extraction_eval(
         "seconds": {"judge_validation": round(validated_s, 1), "extraction": round(extract_s, 1)},
         "scores": [asdict(s) for s in scores],
     }
+
+
+# ── the recorded baseline ─────────────────────────────────────────────────
+
+#: Higher is better: a run regresses when it falls more than the tolerance
+#: below the baseline.
+HIGHER_IS_BETTER = (
+    "recall",
+    "precision",
+    "user_stated_precision",
+    "trust_accuracy",
+    "speaker_accuracy",
+    "turn_accuracy",
+    "date_accuracy",
+    "dated_correct_rate",
+    "undated_left_undated_rate",
+)
+#: Counts per run, lower is better: a run regresses when it rises more than
+#: the tolerance above the baseline.
+LOWER_IS_BETTER = ("misattributed_to_operator", "guest_as_user", "filler_facts")
+
+BASELINE_STATUS = "PROPOSED"
+
+
+def _pair_rate(pair: Any) -> float | None:
+    ok, n = pair
+    return float(ok) / n if n else None
+
+
+def comparable_metrics(metrics: dict[str, Any], *, repeats: int) -> dict[str, float]:
+    """The metrics a baseline records, as plain numbers; counts per run."""
+    out: dict[str, Any] = {k: metrics.get(k) for k in HIGHER_IS_BETTER if k in metrics}
+    out["dated_correct_rate"] = _pair_rate(metrics["dated_correct"])
+    out["undated_left_undated_rate"] = _pair_rate(metrics["undated_left_undated"])
+    out["user_stated_precision"] = _pair_rate(
+        (metrics.get("precision_by_trust") or {}).get("user_stated", [0, 0])
+    )
+    for k in LOWER_IS_BETTER:
+        out[k] = float(metrics.get(k) or 0) / max(1, repeats)
+    return {k: float(v) for k, v in out.items() if v is not None}
+
+
+def load_baseline(path: str | Path) -> dict[str, Any]:
+    """A recorded baseline (``conversation-facts-baseline.yaml``)."""
+    import yaml
+
+    try:
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(f"{path}: cannot read the baseline: {exc}") from exc
+    if not isinstance(data, dict) or data.get("version") != 1:
+        raise ValueError(f"{path}: a baseline is a mapping with version 1")
+    for key in ("model", "split", "metrics", "tolerance", "thresholds"):
+        if key not in data:
+            raise ValueError(f"{path}: the baseline has no {key}")
+    if not isinstance(data["metrics"], dict) or not isinstance(data["tolerance"], dict):
+        raise ValueError(f"{path}: metrics and tolerance must be mappings")
+    return data
+
+
+def compare_to_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
+    """Each recorded metric against this run, and the proposed thresholds.
+
+    ``regressed`` is True when any metric moved the wrong way by more than its
+    tolerance. Thresholds are only reported (``met``): while their status is
+    ``PROPOSED`` they decide nothing.
+    """
+    for key in ("model", "split"):
+        if str(report.get(key)) != str(baseline.get(key)):
+            raise EvalPreconditionError(
+                f"the baseline is for {key} {baseline.get(key)!r}, this run is "
+                f"{report.get(key)!r}: they cannot be compared"
+            )
+    if baseline.get("suite_id", SUITE_ID) != SUITE_ID:
+        raise EvalPreconditionError(f"the baseline is for suite {baseline.get('suite_id')!r}")
+    run = report["comparable"]
+    rows = []
+    for metric, recorded in baseline["metrics"].items():
+        value = run.get(metric)
+        tol = float(baseline["tolerance"].get(metric, 0.0))
+        if value is None:
+            regressed = False
+        elif metric in LOWER_IS_BETTER:
+            regressed = value > float(recorded) + tol + 1e-9
+        else:
+            regressed = value < float(recorded) - tol - 1e-9
+        rows.append(
+            {
+                "metric": metric,
+                "baseline": recorded,
+                "run": value,
+                "tolerance": tol,
+                "regressed": regressed,
+            }
+        )
+    thresholds = []
+    block = baseline.get("thresholds") or {}
+    for bound in ("min", "max"):
+        for metric, target in (block.get(bound) or {}).items():
+            value = run.get(metric)
+            met = value is not None and (
+                value >= float(target) if bound == "min" else value <= float(target)
+            )
+            thresholds.append(
+                {"metric": metric, "bound": bound, "target": target, "run": value, "met": met}
+            )
+    return {
+        "regressed": any(r["regressed"] for r in rows),
+        "rows": rows,
+        "thresholds": thresholds,
+        "thresholds_status": block.get("status", BASELINE_STATUS),
+    }
+
+
+def _tolerance(metric: str, values: list[float]) -> float:
+    """The spread of the runs (max - min), rounded up to a whole unit: a point
+    (0.01) for a rate, one for a count per run; never less than one unit."""
+    import math
+
+    unit = 1.0 if metric in LOWER_IS_BETTER else 0.01
+    spread = (max(values) - min(values)) if values else 0.0
+    return round(max(unit, math.ceil(spread / unit - 1e-9) * unit), 4)
+
+
+def baseline_from_report(report: dict[str, Any], *, thresholds: dict[str, Any]) -> dict[str, Any]:
+    """A baseline from a run of two or more repeats: its pooled metrics, and
+    each metric's tolerance from the spread of the repeats."""
+    per = report.get("per_repeat") or []
+    metrics = dict(report["comparable"])
+    return {
+        "version": 1,
+        "suite_id": report.get("suite_id", SUITE_ID),
+        "model": report["model"],
+        "judge_model": report.get("judge_model"),
+        "split": report["split"],
+        "runs": report.get("repeats", len(per)),
+        "metrics": {k: round(float(v), 4) for k, v in metrics.items()},
+        "tolerance": {
+            k: _tolerance(k, [float(r[k]) for r in per if r.get(k) is not None]) for k in metrics
+        },
+        "thresholds": thresholds,
+    }
+
+
+BASELINE_HEADER = """\
+# The recorded baseline for `robothor memory-eval --extraction --baseline <this file>`
+# (EXTRACTION.md beside it). Written by `--record-baseline`; edit only the
+# thresholds block by hand.
+#
+# metrics: pooled over `runs` repeats of the split on `model`. Counts
+#   (misattributed_to_operator, guest_as_user, filler_facts) are per run.
+# tolerance: how far a run may move the wrong way before it is a regression
+#   (exit 2): the spread of the recorded runs (max - min), rounded up to a
+#   whole point for a rate and a whole count for a count, at least one unit.
+# thresholds: PROPOSED, pending the operator's agreement. Reported as met or
+#   not met; they never fail a run while their status is PROPOSED.
+"""
+
+
+def write_baseline(path: str | Path, report: dict[str, Any]) -> dict[str, Any]:
+    """Record ``report`` as the baseline at ``path``, keeping its thresholds."""
+    import yaml
+
+    target = Path(path)
+    thresholds: dict[str, Any] = {"status": BASELINE_STATUS}
+    if target.exists():
+        thresholds = load_baseline(target).get("thresholds") or thresholds
+    out = baseline_from_report(report, thresholds=thresholds)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        BASELINE_HEADER + yaml.safe_dump(out, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return out
 
 
 def _pct(value: Any) -> str:
@@ -891,6 +1079,7 @@ def format_extraction_markdown(report: dict[str, Any]) -> str:
         f"| Third-party facts stored as the operator's | {m['misattributed_to_operator']} "
         f"of {m['third_party_matched']} matched |",
         f"| Unlabelled user-stated facts from relaying turns | {m['possible_misattributions']} |",
+        f"| Guest claims written as the user | {m.get('guest_as_user', 0)} |",
         f"| Extraction errors | {m['extraction_errors']} |",
         f"| Judge errors | {m['judge_errors']} |",
         "",
@@ -923,6 +1112,35 @@ def format_extraction_markdown(report: dict[str, Any]) -> str:
             lines.append(
                 f"| {i} | {_pct(r['recall'])} | {_pct(r['precision'])} | "
                 f"{_pct(r['trust_accuracy'])} | {_pct(r['date_accuracy'])} |"
+            )
+    cmp = report.get("baseline_comparison")
+    if cmp:
+        verdict = "REGRESSED" if cmp["regressed"] else "no regression"
+        lines += [
+            "",
+            f"Against the recorded baseline: {verdict}.",
+            "",
+            "| Metric | Baseline | This run | Tolerance | Regressed |",
+            "|--------|----------|----------|-----------|-----------|",
+        ]
+        for r in cmp["rows"]:
+            run = "n/a" if r["run"] is None else f"{r['run']:.3f}"
+            lines.append(
+                f"| {r['metric']} | {float(r['baseline']):.3f} | {run} | {r['tolerance']:.2f} | "
+                f"{'yes' if r['regressed'] else 'no'} |"
+            )
+        lines += [
+            "",
+            f"Thresholds ({cmp['thresholds_status']}: reported, they do not fail the run):",
+            "",
+            "| Metric | Target | This run | Met |",
+            "|--------|--------|----------|-----|",
+        ]
+        for t in cmp["thresholds"]:
+            sign = ">=" if t["bound"] == "min" else "<="
+            run = "n/a" if t["run"] is None else f"{t['run']:.3f}"
+            lines.append(
+                f"| {t['metric']} | {sign} {t['target']} | {run} | {'yes' if t['met'] else 'no'} |"
             )
     return "\n".join(lines) + "\n"
 
