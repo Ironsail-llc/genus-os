@@ -150,6 +150,13 @@ fact_id = await store_fact(facts[0], source_content="...", source_type="email")
 results = await search_facts("what caching solution was chosen?", limit=5)
 ```
 
+`store_fact` and `store_facts_batch` strip NUL (0x00) characters from the fact
+text, entities, category, source content, source type and metadata before the
+fact is hashed, embedded and inserted. Postgres rejects NUL in text and jsonb,
+so one stray NUL in extracted text used to fail the insert and lose the fact.
+No other character is changed. Each write that strips one logs a WARNING with
+the count (never the content).
+
 ## Conflict Resolution
 
 When a new fact arrives, the pipeline checks for similar existing facts:

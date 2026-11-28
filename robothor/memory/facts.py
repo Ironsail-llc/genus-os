@@ -321,6 +321,55 @@ _INSERT_FACT_ON_CONFLICT = (
 )
 
 
+def _strip_nul(value: Any) -> tuple[Any, int]:
+    """Return ``value`` with every NUL (0x00) removed, and how many were removed.
+
+    Postgres text columns reject NUL, and jsonb rejects the ``\\u0000`` escape
+    ``json.dumps`` writes for it, so one NUL in extracted text used to fail the
+    whole insert. Only NUL is touched; every other character is kept. Strings
+    inside lists, tuples and dicts (keys and values) are cleaned too.
+    """
+    if isinstance(value, str):
+        removed = value.count("\x00")
+        return (value.replace("\x00", ""), removed) if removed else (value, 0)
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        total = 0
+        for k, v in value.items():
+            clean_k, nk = _strip_nul(k)
+            clean_v, nv = _strip_nul(v)
+            out[clean_k] = clean_v
+            total += nk + nv
+        return out, total
+    if isinstance(value, list | tuple):
+        items = [_strip_nul(v) for v in value]
+        cleaned = [v for v, _ in items]
+        return (tuple(cleaned) if isinstance(value, tuple) else cleaned), sum(n for _, n in items)
+    return value, 0
+
+
+def _strip_nul_for_write(
+    what: str,
+    facts_in: list[dict[str, Any]],
+    source_content: str,
+    source_type: str,
+    metadata: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], str, str, dict[str, Any] | None]:
+    """Strip NUL from every string a fact insert writes, before it is hashed.
+
+    Called at the top of ``store_fact`` and ``store_facts_batch`` (the only
+    callers of ``_insert_fact``) rather than inside ``_insert_fact``, because
+    the content hash and the embedding are computed first and must describe
+    the text actually stored. Logs one content-free line with the count.
+    """
+    (clean_facts, clean_source, clean_type, clean_meta), removed = _strip_nul(
+        (facts_in, source_content, source_type, metadata)
+    )
+    if removed:
+        logger.warning("%s: stripped %d NUL character(s) before write", what, removed)
+    return clean_facts, clean_source, clean_type, clean_meta
+
+
 def _insert_fact(cur: Any, params: tuple[Any, ...], *, tenant_id: str, content_hash: str) -> int:
     """Insert one memory_facts row and return its id.
 
@@ -372,6 +421,10 @@ async def store_fact(
     # should cost neither.
     if benchmark_write_refused(tenant_id or DEFAULT_TENANT, what="store_fact"):
         return 0
+
+    [fact], source_content, source_type, metadata = _strip_nul_for_write(
+        "store_fact", [fact], source_content, source_type, metadata
+    )
 
     _mode = quality_mode()
     _verdict = None
@@ -456,6 +509,10 @@ async def store_facts_batch(
     # that caused incident 2026-09-12 open.
     if benchmark_write_refused(tenant_id or DEFAULT_TENANT, what="store_facts_batch"):
         return []
+
+    facts, source_content, source_type, metadata = _strip_nul_for_write(
+        "store_facts_batch", facts, source_content, source_type, metadata
+    )
 
     texts = [f["fact_text"] for f in facts]
     embeddings = await llm_client.get_embeddings_batch_async(texts)
