@@ -1650,6 +1650,24 @@ def _segment_to_judge(pool: list[dict[str, Any]], head: int) -> dict[str, Any] |
     return next((r for r in pool[head:] if r.get("kind") == "segment"), None)
 
 
+def _last_in_head(
+    ranked: list[dict[str, Any]], key: tuple[str, Any] | None
+) -> list[dict[str, Any]]:
+    """``ranked`` with the judged segment ``key`` moved to its last place.
+
+    A segment judged in beside a head of facts takes the head's last place,
+    whatever its score: read first, it made the answer model abstain on the
+    memory evaluation's world. Its fused rank, the other place it has, is
+    past every row the head holds (that is when it is judged) and so past
+    what the context can hold.
+    """
+    if key is None:
+        return ranked
+    rows = [r for r in ranked if (r.get("kind"), r.get("id")) != key]
+    moved = [r for r in ranked if (r.get("kind"), r.get("id")) == key]
+    return [*rows, *moved]
+
+
 def _judged_relevant(row: dict[str, Any]) -> bool:
     from robothor.rag.reranker import RELEVANT_SCORE
 
@@ -1674,6 +1692,7 @@ async def _rank_pool(
             rerank_topk = max(limit * 4, 24) if _rerank_wide_enabled() else limit
             head = scored_head_size()
             judge = _segment_to_judge(pool, head)
+            kept: tuple[str, Any] | None = None
             if judge is None:
                 reranked: list[dict[str, Any]] = await rerank_with_fallback(
                     query, pool, top_k=rerank_topk
@@ -1690,6 +1709,8 @@ async def _rank_pool(
                 reranked = [
                     r for r in scored if (r.get("kind"), r.get("id")) != key or _judged_relevant(r)
                 ][:rerank_topk]
+                if any((r.get("kind"), r.get("id")) == key for r in reranked):
+                    kept = key
             logger.info(
                 "search_facts rerank: %d candidates → %d survivors (top_k=%d) in %dms",
                 len(pool),
@@ -1698,9 +1719,9 @@ async def _rank_pool(
                 int((time.time() - t0) * 1000),
             )
             if blend:
-                return _blend_rank(reranked, limit)
+                return _last_in_head(_blend_rank(reranked, limit), kept)
             _assign_relevance(reranked)
-            return reranked[:limit]
+            return _last_in_head(reranked[:limit], kept)
         except Exception as e:
             logger.warning("search_facts rerank failed, falling back: %s", e)
     if blend:
