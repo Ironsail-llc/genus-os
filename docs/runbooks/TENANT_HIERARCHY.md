@@ -205,6 +205,22 @@ A plugin author narrows what is exposed by changing the `remote` declaration
 with `org_tool_write`'s `dry_run: true`, which passes every check, is audited
 on both sides and executes nothing.
 
+**What this does not protect against.**
+
+- **Presence.** The bridge and the child check that the person a call names
+  is an owner (for a write) or owner or admin of the parent and may act in
+  the child. They cannot check that the person is there: "attended" is the
+  parent engine's word, carried in `requested_by`. A compromised parent engine
+  can name its owner on an unattended run.
+- **One signing key.** Every engine and the bridge share one signing key, so
+  an engine that is compromised can mint tokens the others accept. Remote
+  tools add no key separation between tenants.
+- **Steering through a result.** Text a child's read returns can try to talk
+  the same run into a write. The control is the untrusted-content boundary
+  (results of all three tools are wrapped as external content), the owner-only
+  rule for writes and the child's own roles, not a check on what the text
+  says.
+
 **An instance with its own capabilities manifest.** The bridge reads
 `agent_capabilities.json` from `ROBOTHOR_CAPABILITIES_MANIFEST`, else
 `<bridge workspace>/agent_capabilities.json`, else
