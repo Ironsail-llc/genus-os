@@ -1374,6 +1374,20 @@ only for turns no earlier run extracted.
 | 10 | 18 | ~29,800 | 10 | ~13,600 |
 | 40 | 78 | ~177,600 | 40 | ~56,500 |
 
+**How accurate it is.** `robothor memory-eval --extraction` runs this
+extraction on 49 labelled generic conversations and scores it with the memory
+eval's judge, validated on every run
+([EXTRACTION.md](benchmarks/memory/EXTRACTION.md)). On a local `qwen3:8b`,
+over two runs, the results were:
+
+* recall 82.7% and precision 61.1%, which is about 91% once true but unlabelled
+  facts are counted;
+* trust label 95.7%, speaker 100% and source turns 99.1% on matched facts.
+
+Dates are the weak point. 74% of dated facts get the right day, and only 50% of
+undated facts are left undated. A text pasted in quotation marks with no
+marker is still stored as the operator's own.
+
 ### Who can read a fact
 
 A fact has an owner, `memory_facts.scope_kind` / `scope_id`, written by the
