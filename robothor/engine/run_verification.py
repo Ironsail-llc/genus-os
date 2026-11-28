@@ -511,7 +511,7 @@ _HYPOTHETICAL_RE = re.compile(
 #   "I'm happy to log the payment ... and SET UP A REMINDER"   offer, 60 back
 #   "any 'best match' I ADDED would be a fabricated person"    modal AFTER
 #   "who SENT THE EMAIL?"                                      a question
-#   "Philip SENT AN EMAIL with subject 'Poduncle'"             someone else
+#   "Alice SENT AN EMAIL with subject 'Poduncle'"              someone else
 #
 # So the clause is read in both directions. Each signal's direction is chosen
 # deliberately rather than "search the whole sentence for anything", because
@@ -563,7 +563,7 @@ _THIRD_PARTY_SUBJECT_RE = re.compile(
     r"cron|agent|buddy|operator|user|sender|they|he|she)\b",
     re.IGNORECASE,
 )
-#: A capitalised name immediately before the verb ("Philip sent an email").
+#: A capitalised name immediately before the verb ("Alice sent an email").
 #: Sentence-initial capitalisation is excluded by the stop-word list.
 _PROPER_SUBJECT_RE = re.compile(
     r"\b(?!(?:The|This|That|These|Those|It|A|An|I|We|Then|Also|And|But|If|"

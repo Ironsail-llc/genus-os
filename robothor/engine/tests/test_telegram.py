@@ -805,7 +805,7 @@ class TestUserResolution:
         """Unregistered user on primary chat gets operator_name fallback."""
         message = MagicMock()
         message.from_user.id = 12345
-        message.from_user.first_name = "Phil"
+        message.from_user.first_name = "Bob"
         message.chat.id = 12345
         message.chat.type = "private"
 
@@ -2039,7 +2039,7 @@ class TestOwnerFabricationFlag:
     def test_off_mode_fabricates_owner_unconditionally(self, bot):
         message = MagicMock()
         message.from_user.id = 55
-        message.from_user.first_name = "Phil"
+        message.from_user.first_name = "Bob"
         message.chat.id = 12345
         message.chat.type = "private"
 
@@ -2053,7 +2053,7 @@ class TestOwnerFabricationFlag:
     def test_observe_mode_still_fabricates_but_logs_loudly(self, bot, caplog):
         message = MagicMock()
         message.from_user.id = 55
-        message.from_user.first_name = "Phil"
+        message.from_user.first_name = "Bob"
         message.chat.id = 12345
         message.chat.type = "private"
 
@@ -2073,7 +2073,7 @@ class TestOwnerFabricationFlag:
     def test_enforce_mode_no_fabrication_without_escape_hatch(self, bot):
         message = MagicMock()
         message.from_user.id = 55
-        message.from_user.first_name = "Phil"
+        message.from_user.first_name = "Bob"
         message.chat.id = 12345
         message.chat.type = "private"
 
@@ -2087,7 +2087,7 @@ class TestOwnerFabricationFlag:
     def test_enforce_mode_group_chat_falls_back_to_guest_not_owner(self, bot):
         message = MagicMock()
         message.from_user.id = 55
-        message.from_user.first_name = "Phil"
+        message.from_user.first_name = "Bob"
         message.chat.id = 12345
         message.chat.type = "group"
 
@@ -2101,7 +2101,7 @@ class TestOwnerFabricationFlag:
     def test_enforce_mode_with_escape_hatch_still_fabricates(self, bot):
         message = MagicMock()
         message.from_user.id = 55
-        message.from_user.first_name = "Phil"
+        message.from_user.first_name = "Bob"
         message.chat.id = 12345
         message.chat.type = "private"
 

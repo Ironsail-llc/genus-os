@@ -95,7 +95,7 @@ local Ollama only, no paid models).
 ## 5. Phase 1 — Knowledge Vault (verbatim store)  ·  RIP 12
 
 **Problem:** `store_fact()` runs every input through LLM extraction, which paraphrases. Safe for
-"Philip prefers concise summaries"; unsafe for an account number, a contact's exact phone, a
+"Alice prefers concise summaries"; unsafe for an account number, a contact's exact phone, a
 routing reference, a license key. MIRIX's Vault preserves critical strings byte-exact.
 
 **Relationship to SOPS:** the Vault is **not** a secret store and does not replace SOPS. SOPS owns

@@ -3,13 +3,9 @@
 THE PROBLEM
 
 ``max_chars`` is written at seed time by ``blocks.DEFAULT_BLOCK_SEEDS`` and read
-by nothing. Measured on the live table:
-
-    2,492 blocks
-    2,092 never read even once
-      130 exceed their own declared budget
-   57,051 characters in the largest single block (~14k tokens)
-    7.1 M characters total
+by nothing. Measured on a live instance: most blocks had never been read even
+once, a minority exceeded their own declared budget, and the largest single
+block held tens of thousands of characters (~14k tokens).
 
 A column that records a limit nobody checks is worse than no column: it gives
 the appearance of a budget with none of the effect. Memory blocks are the
@@ -45,8 +41,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# NULL max_chars must not mean "unlimited" — that is how a 57,051-character
-# always-loaded block came to exist. ~2k tokens is a generous ceiling for a
+# NULL max_chars must not mean "unlimited" — that is how an always-loaded
+# block of tens of thousands of characters came to exist. ~2k tokens is a generous ceiling for a
 # block that is paid on every turn.
 DEFAULT_MAX_CHARS = 8000
 
@@ -68,7 +64,7 @@ class BudgetVerdict:
 
 
 def budget_mode() -> str:
-    """off | observe | enforce. Default off — 2,492 live blocks."""
+    """off | observe | enforce. Default off — existing blocks predate the budget."""
     mode = os.environ.get("MEMORY_BLOCK_BUDGET", "").strip().lower()
     return mode if mode in ("observe", "enforce") else "off"
 

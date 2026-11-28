@@ -7,7 +7,7 @@ test of it may mock `NATSManager` — and this file is where that is honoured:
 a real broker process, a real account config, real Ed25519 signatures, and a
 real request/reply.
 
-Two claims are proved here, and the second is the one Philip asked for:
+Two claims are proved here, and the second is the one the operator asked for:
 
   1. a pairing handshake completes over the wire and activates BOTH sides
   2. a child cannot reach anything it was not exported — and the refusal comes
@@ -106,7 +106,7 @@ class Broker:
 
 @pytest.fixture
 def org(tmp_path, parent_config, child_config, saved):
-    """A child that invited a parent in — Philip's organisational shape.
+    """A child that invited a parent in — the operator's organisational shape.
 
     The CHILD issues the invite ("you are my parent"), so the child is the one
     dialled into and the parent is the client. That is what makes Robothor a

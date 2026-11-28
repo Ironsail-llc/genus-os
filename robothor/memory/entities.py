@@ -25,10 +25,10 @@ from robothor.memory import generation
 logger = logging.getLogger(__name__)
 
 #: Relations returned per direction by get_entity. The payload reaches the model
-#: in full — tracking.py's 4000-char cap is persistence-only — and the operator's
-#: own node carries 5,207 edges. Fixing resolution without bounding the result
-#: would trade a uselessly small answer for one that blows out the context
-#: window on 211 calls a day.
+#: in full — tracking.py's 4000-char cap is persistence-only — and a single hub
+#: node (typically the operator's own) can carry thousands of relations. Fixing
+#: resolution without bounding the result would trade a uselessly small answer
+#: for one that blows out the context window on a frequently called tool.
 MAX_RELATIONS_RETURNED = 50
 
 # Junk-entity guard. Deliberately conservative: it must reject only names that
@@ -382,9 +382,9 @@ async def get_entity(name: str, *, tenant_id: str = "") -> dict[str, Any] | None
 
         # `memory_entities` is unique on (tenant_id, name, entity_type), so one
         # name can be several rows. Without ORDER BY, fetchone() took whichever
-        # Postgres offered: "Philip D'Agostino" resolved to a 1-relation `event`
-        # node while the operator's real 5,207-relation `person` node sat beside
-        # it. Among rows sharing a name, the one carrying the relationships is
+        # Postgres offered: the operator's own name resolved to a 1-relation
+        # `event` node while their real `person` node, carrying thousands of
+        # relations, sat beside it. Among rows sharing a name, the one carrying the relationships is
         # the one the caller means.
         cur.execute(
             """

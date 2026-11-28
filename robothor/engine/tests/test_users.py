@@ -9,11 +9,13 @@ operator.
 
 from __future__ import annotations
 
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from robothor.engine import users
+from robothor.memory.contact_matching import NICKNAMES
 
 
 @pytest.fixture(autouse=True)
@@ -107,6 +109,9 @@ def test_lookup_user_clear_cache_forces_refetch():
 
 def test_lookup_user_docstring_does_not_name_the_operator():
     doc = users.lookup_user.__doc__ or ""
-    assert "Philip" not in doc
-    assert "Delphi" not in doc
+    words = set(re.findall(r"[a-z]+", doc.lower()))
+    # No common first name. The guard is the canonical names of the nickname
+    # table; the generic fixtures (Alice, Bob) are not in it.
+    forbidden = set(NICKNAMES.values()) | {"delphi"}
+    assert not words & forbidden, sorted(words & forbidden)
     assert "operator" in doc.lower()

@@ -1332,8 +1332,9 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
             # The column is `active`, not `is_active`. The typo raised, the
             # surrounding except swallowed it, and tenant_ids silently collapsed
             # to [DEFAULT_TENANT] — so steps 8-13 of nightly maintenance ran for
-            # exactly one tenant. Visible in the data: robothor-primary's access
-            # log was GC'd on schedule while delphi's went back 51 days.
+            # exactly one tenant. Visible in the data: the default tenant's
+            # access log was GC'd on schedule while every other tenant's kept
+            # growing.
             #
             # Only safe to fix now that migration 092's roll-up is deployed:
             # before it, correcting this would have started hard-deleting the

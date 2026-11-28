@@ -1,7 +1,7 @@
 """A test run must never page the operator.
 
-2026-08-27: running the suite sent three real Telegram alerts to Philip's
-phone, including "2 CORRUPT offsite (bytes differ from source):
+2026-08-27: running the suite sent three real Telegram alerts to the
+operator's phone, including "2 CORRUPT offsite (bytes differ from source):
 robothor_memory-20260712.sql.gz" -- a fixture filename that reads exactly
 like a genuine data-integrity emergency. Another named a pytest tmpdir
 outright.
@@ -121,7 +121,9 @@ def _subprocess_argv_nodes(tree: ast.Module) -> list[ast.expr]:
     return out
 
 
-def _literal_strings(node: ast.expr | None, tree: ast.Module, seen: frozenset = frozenset()) -> set[str]:
+def _literal_strings(
+    node: ast.expr | None, tree: ast.Module, seen: frozenset = frozenset()
+) -> set[str]:
     """Every string literal an expression can possibly evaluate to.
 
     Not full symbolic execution — good enough to see through the shapes this
@@ -249,7 +251,7 @@ def test_reads_a_crontab_fixture():
     assert "cron-wrapper.sh" in CRONTAB
 '''
 
-_REAL_INVOCATION_VIA_VARIABLE_FIXTURE = '''
+_REAL_INVOCATION_VIA_VARIABLE_FIXTURE = """
 import subprocess
 from pathlib import Path
 
@@ -260,7 +262,7 @@ SCRIPT = REPO_ROOT / "scripts" / "send_failure_alert.sh"
 def run(unit):
     argv = ["bash", str(SCRIPT), unit]
     return subprocess.run(argv, capture_output=True, text=True)
-'''
+"""
 
 
 def test_the_scan_ignores_a_script_name_mentioned_only_in_data_or_prose():
@@ -268,8 +270,7 @@ def test_the_scan_ignores_a_script_name_mentioned_only_in_data_or_prose():
     false positives: a pager script's name inside a crontab fixture string or
     an assertion on another script's stdout, never passed to subprocess."""
     assert not invokes_a_pager_script(_MENTION_ONLY_FIXTURE), (
-        "a pager script name inside fixture data or a docstring must not "
-        "count as a real invocation"
+        "a pager script name inside fixture data or a docstring must not count as a real invocation"
     )
 
 
@@ -378,6 +379,7 @@ REQUIRED_CALL_PINS = REQUIRED_PINS + (
     "ROBOTHOR_TELEGRAM_API_BASE",
 )
 
+
 class _EnvPinAudit:
     """Resolve the ``env=`` expression of every subprocess call in one file.
 
@@ -445,7 +447,7 @@ class _EnvPinAudit:
 
     def _dict_keys(self, node: ast.Dict, seen: set[str]) -> set[str]:
         keys: set[str] = set()
-        for key, value in zip(node.keys, node.values):
+        for key, value in zip(node.keys, node.values, strict=True):
             if key is None:  # {**other, ...}
                 keys |= self._resolve(value, seen) or set()
             elif isinstance(key, ast.Constant) and isinstance(key.value, str):
@@ -538,11 +540,7 @@ class _EnvPinAudit:
         # sites instead — run_send(tmp_path, env) is only as safe as its
         # callers.
         func = self._enclosing(env)
-        if (
-            isinstance(env, ast.Name)
-            and func is not None
-            and env.id in self._params(func)
-        ):
+        if isinstance(env, ast.Name) and func is not None and env.id in self._params(func):
             index = self._params(func).index(env.id)
             for site in ast.walk(self.tree):
                 if not isinstance(site, ast.Call):
@@ -573,7 +571,7 @@ def env_pin_offenders(path: Path) -> list[str]:
     return _EnvPinAudit(path).offenders()
 
 
-_FIXTURE = '''
+_FIXTURE = """
 import subprocess
 
 BASE = {
@@ -613,7 +611,7 @@ def run_with_its_own_dict():
             "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
         },
     )
-'''
+"""
 
 
 def test_the_scan_finds_an_unpinned_call_site_among_pinned_siblings(tmp_path: Path):
@@ -629,12 +627,10 @@ def test_the_scan_finds_an_unpinned_call_site_among_pinned_siblings(tmp_path: Pa
 
     offenders = env_pin_offenders(fixture)
 
-    assert len(offenders) == 1, (
-        f"expected exactly the one unpinned call site, got {offenders}"
-    )
+    assert len(offenders) == 1, f"expected exactly the one unpinned call site, got {offenders}"
     bad_line = int(offenders[0].split(":")[1].split()[0])
     lines = _FIXTURE.splitlines()
-    start = next(i for i, l in enumerate(lines, 1) if "run_with_its_own_dict" in l)
+    start = next(i for i, line in enumerate(lines, 1) if "run_with_its_own_dict" in line)
     assert bad_line >= start, (
         f"the offender was reported at line {bad_line}, outside the unpinned "
         f"function that starts at {start}"

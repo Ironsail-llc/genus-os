@@ -98,7 +98,7 @@ def test_the_role_mapping_is_the_inverse_of_the_relationship():
 
 
 def test_a_peer_link_grants_no_elevated_role():
-    """PEER is not in Philip's org model. It must not silently become a parent."""
+    """PEER is not in the operator's org model. It must not silently become a parent."""
     assert principal_role_for_peer(Relationship.PEER) == "federation_child"
 
 

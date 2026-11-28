@@ -2,10 +2,10 @@
 
 WHY
 
-Everything that reaches ``store_fact`` is stored. There is no bar. Measured on
-the live table (25,910 active facts): 167 are under 25 characters, 25 exceed
-1,000, 16 carry confidence below 0.3. Small numbers, but they are the visible
-part — the extraction path also stores the entire raw input as a single "fact"
+Everything that reaches ``store_fact`` is stored. There is no bar. On a live
+table a small fraction of active facts are under 25 characters, a few exceed
+1,000, and some carry confidence below 0.3. Small numbers, but they are the
+visible part — the extraction path also stores the entire raw input as a single "fact"
 whenever extraction returns nothing, so a bad input becomes a bad row silently.
 
 A retrieval system's precision is bounded by what it agreed to remember. Garbage
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 MIN_CHARS = 25
 
 # Over this it is a document. A "fact" this long cannot be superseded or
-# contradicted coherently, and it swamps a top-k slot. Measured: 25 rows.
+# contradicted coherently, and it swamps a top-k slot. Rare in practice.
 MAX_CHARS = 1000
 
 MIN_CONFIDENCE = 0.3
