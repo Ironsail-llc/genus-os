@@ -562,3 +562,102 @@ async def test_the_model_judge_is_told_a_claim_about_someone_else_is_wrong(fixtu
 
     await ex.make_fact_judge(llm)(fixtures[0].facts[0], "The user drinks dark roast daily.")
     assert "same person" in questions[0] and "different person" in questions[0]
+
+
+# ═══ a named model that does not answer, and alerts during a measurement ═
+
+
+@pytest.mark.asyncio
+async def test_a_named_model_that_does_not_answer_stops_the_run_first(
+    small_path: Path, monkeypatch
+) -> None:
+    from robothor.llm import ollama
+
+    asked: list[Any] = []
+
+    async def down(*_a, **kw):
+        asked.append(kw.get("model"))
+        raise ConnectionError("connection refused")
+
+    async def never(*_a, **_kw):
+        raise AssertionError("no extraction may run against a model that did not answer")
+
+    monkeypatch.setattr(ollama, "chat", down)
+    monkeypatch.setattr(ex, "extract_conversation_facts", never)
+    with pytest.raises(EvalPreconditionError, match="local-model:1b.*did not answer"):
+        await ex.run_extraction_eval(small_path, model="local-model:1b", llm=_keyword_llm)
+    assert asked == ["local-model:1b"]
+
+
+@pytest.mark.asyncio
+async def test_the_named_model_is_probed_with_one_short_call(small_path: Path, monkeypatch) -> None:
+    from robothor.llm import ollama
+
+    calls: list[dict[str, Any]] = []
+
+    async def ok(messages, **kw):
+        calls.append(kw)
+        return "ok"
+
+    async def extract(window, **_kw):
+        return Extraction([])
+
+    monkeypatch.setattr(ollama, "chat", ok)
+    monkeypatch.setattr(ex, "extract_conversation_facts", extract)
+    await ex.run_extraction_eval(small_path, model="local-model:1b", llm=_keyword_llm)
+    assert calls and calls[0]["model"] == "local-model:1b" and calls[0]["max_tokens"] <= 8
+
+
+@pytest.mark.asyncio
+async def test_the_extraction_runs_as_benchmark_traffic(small_path: Path) -> None:
+    from robothor.engine.run_context import in_benchmark_run
+
+    seen: list[bool] = []
+
+    async def extract(window, **_kw):
+        seen.append(in_benchmark_run())
+        return Extraction([])
+
+    await ex.run_extraction_eval(small_path, model="m", llm=_keyword_llm, extract=extract)
+    assert seen == [True, True, True]
+    assert in_benchmark_run() is False  # restored afterwards
+
+
+@pytest.mark.asyncio
+async def test_a_failing_local_leg_during_a_measurement_never_pages_the_operator(
+    small_path: Path, monkeypatch
+) -> None:
+    from robothor.engine import alerts
+    from robothor.memory import generation
+
+    paged: list[str] = []
+    rows: list[str] = []
+
+    async def page(level, title, body, alert_id):
+        paged.append(title)
+        return True
+
+    async def note(notification_type, level, title, body, metadata):
+        rows.append(notification_type)
+        return True
+
+    async def boom() -> str:
+        raise ConnectionError("model not loaded")
+
+    async def extract(window, **_kw):
+        try:
+            await generation._local_leg(boom(), None)
+        except ConnectionError:
+            return Extraction([], "ConnectionError")
+        return Extraction([])
+
+    monkeypatch.setattr(alerts, "_page", page)
+    monkeypatch.setattr(alerts, "_write_notification", note)
+    generation._release_latch(generation.GENERATION_DOWN_ALERT_KEY)
+    try:
+        await ex.run_extraction_eval(small_path, model="m", llm=_keyword_llm, extract=extract)
+    finally:
+        generation._release_latch(generation.GENERATION_DOWN_ALERT_KEY)
+    assert paged == []
+    assert rows and set(rows) == {alerts.BENCHMARK_DIGEST_TYPE}
+
