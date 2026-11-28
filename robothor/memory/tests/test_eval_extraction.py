@@ -661,3 +661,24 @@ async def test_a_failing_local_leg_during_a_measurement_never_pages_the_operator
     assert paged == []
     assert rows and set(rows) == {alerts.BENCHMARK_DIGEST_TYPE}
 
+
+# ═══ a judge that raises while scoring is reported, not hidden ═══════════
+
+
+@pytest.mark.asyncio
+async def test_a_judge_error_while_scoring_is_logged_and_in_the_summary(
+    small_path: Path, caplog
+) -> None:
+    import logging
+
+    async def flaky(case: Any, ans: Any) -> tuple[bool, str]:
+        if "breaks the judge" in ans.text:
+            raise RuntimeError("LLM judge returned unparseable output")
+        return await _keyword_llm(case, ans)
+
+    extract = _stub_extract({"dark roast": [_x("The user's dark roast habit breaks the judge.")]})
+    with caplog.at_level(logging.WARNING, logger="robothor.memory.eval_extraction"):
+        report = await ex.run_extraction_eval(small_path, model="m", llm=flaky, extract=extract)
+    assert report["metrics"]["judge_errors"] == 1
+    assert "| Judge errors | 1 |" in ex.format_extraction_markdown(report)
+    assert any("unparseable" in r.getMessage() for r in caplog.records)
