@@ -2051,7 +2051,11 @@ the ledger and never sent twice. Each call can take up to 180 seconds.
 
 Every call, allowed or refused, writes an `agent.cross_tenant_call` row under
 the home tenant with `tool` set to `org_tools`, `org_tool_read` or
-`org_tool_write` and `details.remote_tool` naming the child's tool; the child
+`org_tool_write` and `details.remote_tool` naming the child's tool. That
+includes a write the effect ledger holds before it runs (status `denied`,
+`details.outcome: "held_uncertain"`, and `details.held` naming the uncertain
+call by effect id and digest), and the same goes for any write held while
+crossing into another tenant with `tenant`. The child
 writes its own `agent.remote_tool_call` row, whose `status` is one word (`ok`,
 `error`, `denied`, `dry_run`, `replayed`, `unknown`) and whose
 `details.outcome` holds the exact code. Neither row carries the arguments or

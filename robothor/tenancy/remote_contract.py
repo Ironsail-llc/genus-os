@@ -24,6 +24,10 @@ OUTCOME_DRY_RUN = "dry_run"
 OUTCOME_REPLAYED = "replayed"
 OUTCOMES: frozenset[str] = frozenset({OUTCOME_OK, OUTCOME_ERROR, OUTCOME_DRY_RUN, OUTCOME_REPLAYED})
 
+#: ``details.outcome`` of a home audit row for a write the effect ledger held
+#: (an earlier one to the same target is uncertain); the row's status is ``denied``.
+OUTCOME_HELD_UNCERTAIN = "held_uncertain"
+
 # ── Refusal codes ────────────────────────────────────────────────────────────
 
 ERR_WRITE_FORBIDDEN = "remote_write_forbidden"

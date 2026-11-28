@@ -60,6 +60,28 @@ def _refused(exc: effects.EffectPendingError) -> dict[str, Any]:
     return refusal
 
 
+def _audit_held(
+    name: str, args: dict[str, Any], ctx: ToolContext, exc: effects.EffectPendingError
+) -> None:
+    """A crossing the fence held never reaches its handler, where crossings are
+    audited: write its one row here. The uncertain call is named by its effect
+    id and a digest (the remote tool's argument digest, else the effect's
+    fingerprint), never by its arguments. Nothing for a call that crosses
+    nothing (``audit_answered`` decides)."""
+    from robothor.engine.tools.cross_tenant import audit_answered
+    from robothor.tenancy.remote_contract import OUTCOME_HELD_UNCERTAIN
+
+    digest = exc.target.get("args_digest") or exc.record.get("fingerprint") or ""
+    audit_answered(
+        name,
+        args,
+        ctx,
+        "denied",
+        code=OUTCOME_HELD_UNCERTAIN,
+        held={"effect_id": exc.effect_id, "digest": digest},
+    )
+
+
 def _unknown(identifier: Any, message: str) -> dict[str, Any]:
     return {
         "error": message,
@@ -96,6 +118,7 @@ async def invoke(
     try:
         record = await _reserve(context, name, args, ctx)
     except effects.EffectPendingError as exc:
+        _audit_held(name, args, ctx, exc)
         return _refused(exc)
     except Exception:
         logger.warning("Effect admission unavailable; dispatch refused", exc_info=True)
