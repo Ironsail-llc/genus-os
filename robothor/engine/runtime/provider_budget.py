@@ -45,6 +45,39 @@ async def budget_operation(budget: Any, name: str, *args: Any) -> None:
         getattr(budget, name)(*args)
 
 
+def _ledger_refusal(exc: ValueError) -> RequestBudgetError:
+    """An attempt-ledger refusal is an ADMISSION failure, never a model fault.
+
+    ``DurableAttemptBudget`` raises a bare ``ValueError`` once the goal lease
+    stops authorizing spend. Bare, the model-fallback loop cannot tell it from a
+    provider fault: it retries the whole chain and opens a breaker per rung. On
+    2026-10-24 one lapsed lease tripped four breakers and escalated "check the
+    provider key/account" for a key that was never the problem.
+
+    A ``RequestBudgetError`` is the run's hard stop -- the loop re-raises it
+    without blaming a model (``_funding_refusal``) -- so the refusal is
+    translated where it is read, the same way ``reserve`` has always translated
+    it.
+    """
+    return RequestBudgetError(str(exc))
+
+
+async def _authorized_read(budget: Any, name: str) -> Any:
+    """Read a ledger figure, translating an authorization refusal as it is read."""
+    try:
+        return await budget_value(budget, name)
+    except ValueError as exc:
+        raise _ledger_refusal(exc) from exc
+
+
+async def _authorized_operation(budget: Any, name: str, *args: Any) -> None:
+    """Mutate the ledger, translating an authorization refusal as it is made."""
+    try:
+        await budget_operation(budget, name, *args)
+    except ValueError as exc:
+        raise _ledger_refusal(exc) from exc
+
+
 #: Framing allowance per message, plus one for the request envelope. It is in
 #: TOKENS, like everything else subtracted from the budget. The value was 256
 #: BYTES per message back when the whole bound was measured in bytes; keeping
@@ -95,18 +128,15 @@ async def goal_completion(call: Any, kwargs: dict[str, Any], budget: Any) -> Any
     ):
         raise RequestBudgetError("No goal token bound for multimodal or provider-tool requests")
     input_bound = _input_token_bound(kwargs)
-    limit = await budget_value(budget, "limit")
-    remaining = limit - await budget_value(budget, "charged") if limit is not None else None
+    limit = await _authorized_read(budget, "limit")
+    remaining = limit - await _authorized_read(budget, "charged") if limit is not None else None
     output_bound = kwargs.get("max_tokens") or 4096
     if remaining is not None:
         output_bound = min(output_bound, remaining - input_bound)
     if output_bound <= 0:
         raise RequestBudgetError("Goal budget cannot cover the request's conservative input bound")
     call_id = str(uuid4())
-    try:
-        await budget_operation(budget, "reserve", call_id, input_bound + output_bound)
-    except ValueError as exc:
-        raise RequestBudgetError(str(exc)) from exc
+    await _authorized_operation(budget, "reserve", call_id, input_bound + output_bound)
     import asyncio
 
     from robothor.goals.runtime import binding
@@ -114,17 +144,23 @@ async def goal_completion(call: Any, kwargs: dict[str, Any], budget: Any) -> Any
 
     current = binding.get()
     if current:
-        await asyncio.to_thread(
-            reserve_provider_usage,
-            current.tenant,
-            current.goal_id,
-            current.attempt,
-            await budget_value(budget, "charged"),
-        )
+        charged = await _authorized_read(budget, "charged")
+        try:
+            await asyncio.to_thread(
+                reserve_provider_usage,
+                current.tenant,
+                current.goal_id,
+                current.attempt,
+                charged,
+            )
+        except ValueError as exc:
+            # A lease that lapsed between the read above and this write refuses
+            # here instead; same refusal, same translation.
+            raise _ledger_refusal(exc) from exc
     response = await call(**{**kwargs, "max_tokens": output_bound})
     if kwargs.get("stream"):
         return TokenStream(response, budget, call_id)
-    await budget_operation(budget, "settle", call_id, usage_tokens(response))
+    await _authorized_operation(budget, "settle", call_id, usage_tokens(response))
     return response
 
 
@@ -145,7 +181,7 @@ class TokenStream:
             chunk = await self.iterator.__anext__()
         except StopAsyncIteration:
             self.done = True
-            await budget_operation(self.budget, "settle", self.call_id, self.actual)
+            await _authorized_operation(self.budget, "settle", self.call_id, self.actual)
             raise
         except BaseException:
             await self.aclose()
