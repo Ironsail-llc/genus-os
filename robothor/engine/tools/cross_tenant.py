@@ -584,7 +584,7 @@ def audit_cross_tenant(
     Never raises.
     """
     try:
-        from robothor.audit.logger import log_event
+        from robothor.audit.logger import COLUMN_LIMITS, log_event
         from robothor.engine.event_writer import get_event_writer
         from robothor.secrets.redaction import redact
 
@@ -605,11 +605,11 @@ def audit_cross_tenant(
             event_type=CROSS_TENANT_EVENT,
             action=tool,
             category="agent",
-            actor=agent_id or "unknown",
+            actor=(agent_id or "unknown")[: COLUMN_LIMITS["actor"]],
             user_id=user_id,
             details=details,
-            target=target_tenant,
-            status=outcome,
+            target=target_tenant[: COLUMN_LIMITS["target"]],
+            status=outcome[: COLUMN_LIMITS["status"]],
             tenant_id=home_tenant,
         )
     except Exception:  # noqa: BLE001 - audit must not break the call it records
