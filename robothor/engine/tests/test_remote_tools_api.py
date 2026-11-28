@@ -1113,3 +1113,35 @@ async def test_an_internal_failure_is_audited_and_keeps_a_writes_claim(world, mo
     [row] = _audits(world)
     assert row["details"]["outcome"] == "internal_error"
     assert world.ledger.rows[(CHILD, "req-1")]["state"] == "running"
+
+
+# ── dry_run where it does not belong ─────────────────────────────────────────
+
+
+async def test_dry_run_inside_a_writes_arguments_is_refused_not_run(world) -> None:
+    answer = await _call(**_risky(args={"dry_run": True}))
+
+    payload = _refusal(answer, 422, rc.ERR_BAD_ARGUMENTS)
+    assert "top level" in payload["message"]
+    assert world.handlers.calls == []
+    assert world.ledger.rows == {}
+
+
+async def test_a_read_asked_as_a_dry_run_is_refused(world) -> None:
+    _refusal(await _call(**_body(dry_run=True)), 422, rc.ERR_BAD_ARGUMENTS)
+    assert world.handlers.calls == []
+
+
+# ── a declared name that an adapter has taken ───────────────────────────────
+
+
+async def test_a_declared_tool_routed_to_an_adapter_is_unknown(world, monkeypatch) -> None:
+    from robothor.engine.tools.registry import get_registry
+
+    monkeypatch.setitem(get_registry()._adapter_routes, "acme_lookup", "some-mcp-server")
+
+    _refusal(await _call(**_body()), 404, rc.ERR_TOOL_UNKNOWN)
+    _refusal(await _request("GET", "/api/admin/remote-tools/acme_lookup"), 404, rc.ERR_TOOL_UNKNOWN)
+    listed = (await _request("GET", "/api/admin/remote-tools")).json()
+    assert "acme_lookup" not in {tool["name"] for tool in listed["tools"]}
+    assert world.handlers.calls == []
