@@ -2,8 +2,9 @@
 
 The payload key ``remote`` sits beside ``read_only`` and ``effects`` and follows
 their rule: a plugin speaks only for tools it provides, and a malformed
-declaration refuses the whole plugin, with the tool named. The manifest may
-mirror it as ``remote_tools: {read: [...], write: [...]}``; when it does, the
+declaration refuses the whole plugin, with the tool named, never an exception
+out of the loader. The manifest must mirror it as ``remote_tools: {read: [...],
+write: [...]}``, so the pre-install scan shows what a wheel exposes, and the
 payload must say the same thing. A plugin that says nothing offers nothing.
 """
 
@@ -58,7 +59,26 @@ def _payload(remote: Any = None, *, read_only: tuple[str, ...] = ("acme_lookup",
     return payload
 
 
+def _mirror(remote: Any) -> str:
+    """The manifest a well-formed ``remote`` needs: its read and write sets."""
+    sets: dict[str, list[str]] = {"read": [], "write": []}
+    if isinstance(remote, dict):
+        for tool, entry in remote.items():
+            access = entry.get("access") if isinstance(entry, dict) else None
+            if isinstance(tool, str) and isinstance(access, str) and access in sets:
+                sets[access].append(tool)
+    return (
+        "handlers: [acme_lookup, acme_update]\n"
+        f"remote_tools:\n  read: [{', '.join(sets['read'])}]\n"
+        f"  write: [{', '.join(sets['write'])}]\n"
+    )
+
+
 def _load(payload: dict[str, Any], manifest: str | None = None):
+    """Load one plugin. A payload with ``remote`` gets its manifest mirror
+    unless the test passes a manifest of its own."""
+    if manifest is None and "remote" in payload:
+        manifest = _mirror(payload["remote"])
     return load_plugins(
         entry_points=[_ToolsEP(payload, manifest)], reserved_names=set(), lockfile_path=None
     )
@@ -89,7 +109,7 @@ def test_a_declaration_is_loaded_with_its_defaults() -> None:
         "access": "read",
         "attestations": [],
         "notes": "Look a record up.",
-        "plugin": "acme",
+        "plugin": "acme-tools",
     }
     assert result.remote["acme_update"]["access"] == "write"
     assert result.remote["acme_update"]["attestations"] == ["baa"]
@@ -219,12 +239,87 @@ def test_access_swapped_against_the_manifest_is_refused() -> None:
     assert "acme_lookup" in reasons
 
 
-def test_a_manifest_without_the_mirror_does_not_constrain_the_payload() -> None:
-    result = _load(
-        _payload({"acme_lookup": {"access": "read"}}),
-        manifest="handlers: [acme_lookup, acme_update]\n",
+def test_a_payload_remote_without_the_manifest_mirror_is_refused() -> None:
+    # The pre-install scan reads the manifest only: a wheel exposing tools it
+    # does not show there would install looking like it exposes nothing.
+    reasons = _refused(
+        _load(
+            _payload({"acme_lookup": {"access": "read"}}),
+            manifest="handlers: [acme_lookup, acme_update]\n",
+        )
     )
-    assert not result.failures and set(result.remote) == {"acme_lookup"}
+    assert "remote_tools" in reasons
+
+
+def test_a_payload_remote_without_any_manifest_is_refused() -> None:
+    payload = _payload({"acme_lookup": {"access": "read"}})
+    result = load_plugins(
+        entry_points=[_ToolsEP(payload, None)], reserved_names=set(), lockfile_path=None
+    )
+
+    assert "remote_tools" in _refused(result)
+
+
+# ── wrong shapes are refusals, never exceptions ──────────────────────────────
+
+_WRONG_SHAPES: list[Any] = [
+    # the `remote` value itself
+    [],
+    "acme_lookup",
+    7,
+    True,
+    # an entry
+    {"acme_lookup": ["read"]},
+    {"acme_lookup": None},
+    {"acme_lookup": 3},
+    # access: unhashable and other non-strings
+    {"acme_lookup": {"access": ["read"]}},
+    {"acme_lookup": {"access": {"read": True}}},
+    {"acme_lookup": {"access": {"read"}}},
+    {"acme_lookup": {"access": b"read"}},
+    {"acme_lookup": {"access": 1.5}},
+    # attestations
+    {"acme_update": {"access": "write", "attestations": {"baa": True}}},
+    {"acme_update": {"access": "write", "attestations": [["baa"]]}},
+    {"acme_update": {"access": "write", "attestations": [{"baa": 1}]}},
+    {"acme_update": {"access": "write", "attestations": [None]}},
+    {"acme_update": {"access": "write", "attestations": 5}},
+    # notes
+    {"acme_lookup": {"access": "read", "notes": ["x"]}},
+    {"acme_lookup": {"access": "read", "notes": {"x": 1}}},
+    {"acme_lookup": {"access": "read", "notes": 12}},
+    # keys that are not strings, at either level
+    {1: {"access": "read"}},
+    {("acme_lookup",): {"access": "read"}},
+    {"acme_lookup": {1: "read"}},
+    {"acme_lookup": {("access",): "read"}},
+]
+
+
+@pytest.mark.parametrize("remote", _WRONG_SHAPES, ids=lambda r: repr(r)[:40])
+def test_any_wrong_shape_refuses_the_plugin_cleanly(remote: Any) -> None:
+    result = _load(_payload(remote), manifest=_mirror(None))
+
+    _refused(result)
+
+
+@pytest.mark.parametrize("remote", _WRONG_SHAPES, ids=lambda r: repr(r)[:40])
+def test_a_wrong_shape_never_takes_another_plugin_down(remote: Any) -> None:
+    class _OtherEP(_ToolsEP):
+        def __init__(self) -> None:
+            super().__init__(
+                {"genus_contract_version": "1.0", "handlers": {"other_tool": _noop}}, None
+            )
+            self.name = "other"
+
+    result = load_plugins(
+        entry_points=[_ToolsEP(_payload(remote), _mirror(None)), _OtherEP()],
+        reserved_names=set(),
+        lockfile_path=None,
+    )
+
+    assert "other_tool" in result.tools
+    assert result.failures
 
 
 # ── the scan reports it ──────────────────────────────────────────────────────
