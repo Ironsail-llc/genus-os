@@ -86,7 +86,9 @@ class ContextBundle:
 
 
 def fill_budget(
-    candidates: Sequence[tuple[str, str, str]], budget: int | None
+    candidates: Sequence[tuple[str, str, str]],
+    budget: int | None,
+    cut_now: frozenset[str] = frozenset(),
 ) -> tuple[ContextItem, ...]:
     """Take ``(id, kind, text)`` candidates best first until the budget is full.
 
@@ -96,7 +98,9 @@ def fill_budget(
     is at least the product's minimum), so the measured context is the one the
     tool ships.
     Duplicate ids keep their first (best) occurrence; ``rank`` is the
-    position before packing.
+    position before packing. A candidate whose id is in ``cut_now`` (a
+    segment judged in, ``recall.is_judged_in``) is cut to fit where it is
+    reached, as the product cuts it.
     """
     from robothor.memory import recall
 
@@ -120,6 +124,7 @@ def fill_budget(
         _cut,
         # The product's minimum, in tokens.
         min_cut=recall.RECALL_MIN_CUT_CHARS // _CHARS_PER_TOKEN,
+        cut_now=lambda c: c[1] in cut_now,
     )
     return tuple(
         ContextItem(item_id, kind, text, estimate_tokens(text), rank)
@@ -244,7 +249,19 @@ class RecallSystem:
         with tenant_scope(tenant):
             rows = await search_facts(case.question, limit=_CANDIDATES, tenant_id=tenant, **extra)
         cands = _fact_candidates(rows, world_handle)
-        return _bundle(self.name, fill_budget(cands, token_budget), token_budget, True, started)
+        judged = _judged_ids(rows, world_handle)
+        return _bundle(
+            self.name, fill_budget(cands, token_budget, judged), token_budget, True, started
+        )
+
+
+def _judged_ids(rows: Sequence[dict[str, Any]], world_handle: WorldHandle) -> frozenset[str]:
+    """World ids of the rows packing cuts to fit where reached (``judged_in``)."""
+    from robothor.memory.recall import is_judged_in
+
+    return frozenset(
+        c[0] for c in _fact_candidates([r for r in rows if is_judged_in(r)], world_handle)
+    )
 
 
 class RecallBudgetSystem:
@@ -284,7 +301,10 @@ class RecallBudgetSystem:
                 reader_person_id=reader,
             )
         cands = _fact_candidates([*head, *tail], world_handle)
-        return _bundle(self.name, fill_budget(cands, token_budget), token_budget, True, started)
+        judged = _judged_ids(head, world_handle)
+        return _bundle(
+            self.name, fill_budget(cands, token_budget, judged), token_budget, True, started
+        )
 
 
 def _fact_candidates(

@@ -102,6 +102,7 @@ def pack_within(
     size: Callable[[_T], int],
     truncate: Callable[[_T, int], _T] | None = None,
     min_cut: int = RECALL_MIN_CUT_CHARS,
+    cut_now: Callable[[_T], bool] | None = None,
 ) -> list[_T]:
     """The one packing rule: ``items`` in order, each kept while it still fits.
 
@@ -117,9 +118,15 @@ def pack_within(
     item the skipping kept stays, whole; at most one item is cut. The first,
     top-ranked item is never skipped: if it alone is larger than the cap it is
     kept cut to the cap, so a result is never empty because its best row was
-    long. Without ``truncate`` nothing is cut. The recall tool, the routed path
-    and the eval all pack with this function, so the measured context is the
-    shipped one.
+    long. Without ``truncate`` nothing is cut.
+
+    An item for which ``cut_now`` is true (a segment judged in beside a head of
+    facts, :func:`is_judged_in`) that does not fit whole is cut to the room
+    left at the point it is reached, when at least ``min_cut`` remains, rather
+    than skipped: skipped, the short rows after it filled the room and a
+    segment judged relevant never reached the context. The recall tool, the
+    routed path and the eval all pack with this function, so the measured
+    context is the shipped one.
     """
     if cap is None:
         return list(items)
@@ -129,11 +136,24 @@ def pack_within(
     for index, item in enumerate(items):
         n = size(item)
         if used + n > cap:
+            room = cap - used
             if index == 0 and truncate is not None and cap > 0:
                 cut = truncate(item, cap)
                 if 0 < size(cut) <= cap:
                     kept.append((index, cut))
                     used += size(cut)
+            elif (
+                cut_now is not None
+                and truncate is not None
+                and cut_now(item)
+                and room >= max(1, min_cut)
+            ):
+                cut = truncate(item, room)
+                if 0 < size(cut) <= room:
+                    kept.append((index, cut))
+                    used += size(cut)
+                elif skipped is None:
+                    skipped = index
             elif skipped is None:
                 skipped = index
             continue
@@ -176,9 +196,15 @@ def truncate_row(row: dict[str, Any], limit: int) -> dict[str, Any]:
     return out
 
 
+def is_judged_in(row: Mapping[str, Any]) -> bool:
+    """Whether ``row`` is a segment judged in beside a head of facts
+    (``facts._last_in_head``); packing cuts it to fit where it is reached."""
+    return bool(row.get("judged_in"))
+
+
 def within_context_cap(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """Rows in order packed into :func:`recall_context_chars` by :func:`pack_within`."""
-    return pack_within(rows, recall_context_chars(), row_chars, truncate_row)
+    return pack_within(rows, recall_context_chars(), row_chars, truncate_row, cut_now=is_judged_in)
 
 
 @dataclass

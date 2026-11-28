@@ -204,7 +204,13 @@ exactly that room, ends with ` [truncated]` (the row carries
 `truncated: true`) and keeps its rank position. Every row the skipping kept
 stays whole, and at most one row is cut; with less room left it stays empty.
 (Skipping alone left room: a 2,100-character segment followed by
-2,000-character ones packed to 2,100 of 4,000 characters.) The top-ranked row
+2,000-character ones packed to 2,100 of 4,000 characters.) A segment judged
+in beside a head of facts (`judged_in`, see step 3) that does not fit whole is
+cut to fit at the point it is reached, when at least the minimum remains,
+instead of being skipped: skipped, the short facts after it took the room, and
+a segment judged relevant never reached the context (16 head facts of 150
+characters left 1,600; the fill used it). The eval packs it the same way, its
+minimum in tokens. The top-ranked row
 is never dropped: if it alone is over the cap it is cut to the cap, so a
 result is never empty because its best row was long. The eval sizes in tokens
 and uses the same minimum, 75 tokens. On the routed path a temporal query

@@ -105,7 +105,7 @@ def _normalize_fact(r: dict[str, Any]) -> dict[str, Any]:
     # A row the graph leg found keeps its labels: who asserted it, the path of
     # entities that reached it, and which legs found it (the shared formatter,
     # ``recall.row_text``, labels a row only the graph found).
-    for key in ("origin", "graph_hops", "graph_path", "leg_ranks", "budget_tail"):
+    for key in ("origin", "graph_hops", "graph_path", "leg_ranks", "budget_tail", "judged_in"):
         if key in r:
             row[key] = r[key]
     return row
@@ -270,9 +270,15 @@ async def recall(
         fused = head + related + tail
 
     # Budget cap: the one packing rule (recall.pack_within), then the limit.
-    from robothor.memory.recall import pack_within, recall_context_chars, row_chars, truncate_row
+    from robothor.memory.recall import (
+        is_judged_in,
+        pack_within,
+        recall_context_chars,
+        row_chars,
+        truncate_row,
+    )
 
     cap = recall_context_chars() if budget_chars is None else budget_chars
-    capped = pack_within(fused, cap, row_chars, truncate_row)[:limit]
+    capped = pack_within(fused, cap, row_chars, truncate_row, cut_now=is_judged_in)[:limit]
 
     return {"query_class": cls, "results": capped}
