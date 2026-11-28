@@ -9,7 +9,12 @@ the first database call.
 | Suite | `memory-eval --suite docs/benchmarks/memory/suite.yaml` | 267 hand-checked and generated cases. Each seeds a few facts, runs `search_facts` and checks whether the gold string is in the top k. Runs nightly in `memory-eval` with `--record` (`robothor-memory-eval.service`) |
 | World | `memory-eval --world [--answers]` | One generated world of about 3,500 facts, CRM rows, documents and transcripts, seeded once into `memory-eval-world` ([WORLD.md](WORLD.md)). Without `--answers` it uses the same substring-in-top-k scoring. With `--answers` a local model answers from each system's context at an equal token budget, and a validated judge grades the answers |
 
-Neither mode replays the questions a real tenant asked. That is
+A third mode, `memory-eval --extraction`, needs no tenant and no database. It
+runs the real conversation fact extraction on a labelled set of generic
+conversations and scores what comes back with a validated judge
+([EXTRACTION.md](EXTRACTION.md)).
+
+Neither retrieval mode replays the questions a real tenant asked. That is
 `memory-replay`, a read-only side-by-side of two recall configurations with no
 score: see [Replaying real questions before a change goes live](../../memory-system.md#replaying-real-questions-before-a-change-goes-live).
 

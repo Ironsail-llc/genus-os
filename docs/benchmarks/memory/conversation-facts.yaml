@@ -1,0 +1,1146 @@
+# Labelled conversations for the conversation fact extraction measurement
+# (`robothor memory-eval --extraction`; see EXTRACTION.md beside this file).
+#
+# Each conversation is one extraction window, read as conversation ingest reads
+# it: the owner's turns (role user), the assistant's, and guests' turns (role
+# user, owner: false, speaker: <name>). A turn's time is `at` plus its number in
+# minutes unless it carries its own `at`, so a relative date is counted from a
+# fixed day and the result never depends on when the run happens.
+#
+# Each label:
+#   fact        the expected fact, written as the extraction is asked to write it
+#   keys        terms of which an extracted sentence must name at least one to be
+#               considered (any other sentence is settled as no match by rule)
+#   speaker     who said it: user (the owner), assistant, or a guest's name; a
+#               list when more than one is right (a paste the assistant restated)
+#   trust       the origin it must be stored with: user_stated, agent_generated
+#               or external; a list when more than one is right
+#   turns       the turn numbers it may cite
+#   date        the event day (YYYY-MM-DD), null for none, or a list of
+#               acceptable values. A month with no day accepts null or the 1st.
+#   details     values the fact must keep (a list's items, a changed-from value),
+#               each a list of acceptable spellings
+#   paraphrase  the same fact in other words: the judge must match it
+#   decoy       a close but different fact: the judge must not match it
+#   required    false for a true fact the extraction may leave out (neither
+#               missed nor a false positive); default true
+#
+# Generic people and places only: this file is public.
+version: 1
+conversations:
+  # ── first-person preferences ───────────────────────────────────────────
+  - id: pref-01
+    category: preference
+    at: "2026-03-04T08:10:00+00:00"
+    turns:
+      - {role: user, text: "Morning! Quick one: I really prefer dark roast coffee, light roasts taste sour to me."}
+      - {role: assistant, text: "Got it. Dark roasts like a French or Italian roast should suit you."}
+    facts:
+      - fact: "The user prefers dark roast coffee."
+        keys: ["dark roast", "dark roasts", "dark-roast"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user likes dark roast coffee best."
+        decoy: "The user prefers light roast coffee."
+      - fact: "The user finds light roast coffee sour."
+        keys: ["light roast", "light roasts", "sour"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        required: false
+        paraphrase: "Light roasts taste sour to the user."
+        decoy: "The user finds light roast coffee sweet."
+
+  - id: pref-02
+    category: preference
+    at: "2026-03-05T19:00:00+00:00"
+    turns:
+      - {role: user, text: "Can you suggest dinner ideas? I'm vegetarian and I can't stand mushrooms."}
+      - {role: assistant, text: "Sure: a chickpea curry, a halloumi traybake, or a black bean chilli."}
+    facts:
+      - fact: "The user is vegetarian."
+        keys: ["vegetarian"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user follows a vegetarian diet."
+        decoy: "The user is vegan."
+      - fact: "The user dislikes mushrooms."
+        keys: ["mushroom", "mushrooms"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user cannot stand mushrooms."
+        decoy: "The user loves mushrooms."
+      - fact: "The assistant suggested chickpea curry, halloumi traybake and black bean chilli for dinner."
+        keys: ["chickpea", "halloumi", "black bean", "chilli"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [2]
+        date: null
+        required: false
+        details: [["chickpea"], ["halloumi"], ["black bean"]]
+        paraphrase: "For dinner the assistant proposed a chickpea curry, a halloumi traybake or a black bean chilli."
+        decoy: "The user cooked a chickpea curry for dinner."
+
+  - id: pref-03
+    category: preference
+    at: "2026-03-09T12:30:00+00:00"
+    turns:
+      - {role: user, text: "When you write to me, keep it short. I hate long emails and I'd rather get bullet points."}
+      - {role: assistant, text: "Understood, I'll keep replies brief and use bullet points."}
+    facts:
+      - fact: "The user prefers short messages with bullet points."
+        keys: ["bullet", "bullets", "short", "brief"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user wants brief replies written as bullet points."
+        decoy: "The user prefers long, detailed emails."
+
+  - id: pref-04
+    category: preference
+    at: "2026-03-12T21:15:00+00:00"
+    turns:
+      - {role: user, text: "Any podcast recommendations? I mostly listen to history podcasts, true crime freaks me out."}
+      - {role: assistant, text: "You might enjoy a long-form history series on the Roman Republic."}
+    facts:
+      - fact: "The user mostly listens to history podcasts."
+        keys: ["history"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "History podcasts are what the user mainly listens to."
+        decoy: "The user mostly listens to true crime podcasts."
+      - fact: "The user dislikes true crime podcasts."
+        keys: ["true crime"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "True crime podcasts scare the user."
+        decoy: "The user enjoys true crime podcasts."
+
+  - id: pref-05
+    category: preference
+    at: "2026-03-15T07:45:00+00:00"
+    turns:
+      - {role: assistant, text: "Would you like me to schedule your workouts in the morning or the evening?"}
+      - {role: user, text: "Mornings, definitely. I'm useless after 6pm."}
+    facts:
+      - fact: "The user prefers to work out in the morning."
+        keys: ["morning", "mornings"]
+        speaker: user
+        trust: user_stated
+        turns: [2]
+        date: null
+        paraphrase: "The user likes workouts scheduled in the mornings."
+        decoy: "The user prefers to work out in the evening."
+
+  # ── purchases ──────────────────────────────────────────────────────────
+  - id: buy-01
+    category: purchase
+    at: "2026-04-02T10:00:00+00:00"
+    turns:
+      - {role: user, text: "I finally bought a standing desk for my home office. Any tips for getting used to it?"}
+      - {role: assistant, text: "Start with 20 to 30 minutes of standing per hour and increase gradually."}
+    facts:
+      - fact: "The user bought a standing desk for their home office."
+        keys: ["standing desk", "desk"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user has purchased a standing desk for the home office."
+        decoy: "The user returned a standing desk."
+      - fact: "The assistant advised standing 20 to 30 minutes per hour and increasing gradually."
+        keys: ["20", "30 minutes", "gradually"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [2]
+        date: null
+        required: false
+        paraphrase: "The assistant suggested starting with 20-30 minutes of standing each hour."
+        decoy: "The assistant advised standing all day from the start."
+
+  - id: buy-02
+    category: purchase
+    at: "2026-04-06T16:20:00+00:00"
+    turns:
+      - {role: user, text: "We got a second-hand piano for the kids, an old upright. It cost us 400 euros."}
+      - {role: assistant, text: "Nice! An upright is a good start. Have it tuned after it settles for a few weeks."}
+    facts:
+      - fact: "The user bought a second-hand upright piano for 400 euros."
+        keys: ["piano", "upright"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        details: [["400"]]
+        paraphrase: "The user's family purchased a used upright piano costing 400 euros."
+        decoy: "The user sold an upright piano for 400 euros."
+      - fact: "The assistant advised having the piano tuned after a few weeks."
+        keys: ["tuned", "tune", "tuning"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [2]
+        date: null
+        required: false
+        paraphrase: "The assistant recommended tuning the piano once it has settled for a few weeks."
+        decoy: "The user had the piano tuned."
+
+  - id: buy-03
+    category: purchase
+    at: "2026-04-11T11:05:00+00:00"
+    turns:
+      - {role: user, text: "Ordered noise-cancelling headphones online, they arrive Friday. Hoping they help in the open-plan office."}
+      - {role: assistant, text: "They should help a lot with background chatter."}
+    facts:
+      - fact: "The user ordered noise-cancelling headphones."
+        keys: ["headphones", "noise-cancelling", "noise cancelling"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user has placed an order for noise-cancelling headphones."
+        decoy: "The user cancelled an order for headphones."
+      - fact: "The user works in an open-plan office."
+        keys: ["open-plan", "open plan"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        required: false
+        paraphrase: "The user's office is open plan."
+        decoy: "The user works from a private office."
+
+  - id: buy-04
+    category: purchase
+    at: "2026-04-14T09:40:00+00:00"
+    turns:
+      - {role: user, text: "Should I get the 256 GB or 512 GB laptop?"}
+      - {role: assistant, text: "If you edit video, take the 512 GB; otherwise 256 GB is plenty."}
+      - {role: user, text: "I don't edit video. Done, I just bought the 256 GB one."}
+    facts:
+      - fact: "The user bought the 256 GB laptop."
+        keys: ["256"]
+        speaker: user
+        trust: user_stated
+        turns: [3]
+        date: null
+        paraphrase: "The user purchased the laptop with 256 GB of storage."
+        decoy: "The user bought the 512 GB laptop."
+      - fact: "The user does not edit video."
+        keys: ["video"]
+        speaker: user
+        trust: user_stated
+        turns: [3]
+        date: null
+        required: false
+        paraphrase: "The user does no video editing."
+        decoy: "The user edits video professionally."
+
+  - id: buy-05
+    category: purchase
+    at: "2026-04-20T18:30:00+00:00"
+    turns:
+      - {role: user, text: "Treated myself to a cast-iron skillet. What's the best way to season it?"}
+      - {role: assistant, text: "Rub a thin layer of oil over it and bake it upside down at 230 C for an hour."}
+    facts:
+      - fact: "The user bought a cast-iron skillet."
+        keys: ["skillet", "cast-iron", "cast iron"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user purchased a cast iron skillet for themselves."
+        decoy: "The user bought a non-stick frying pan."
+      - fact: "The assistant advised seasoning the skillet with a thin layer of oil baked at 230 C for an hour."
+        keys: ["oil", "230", "season", "seasoning"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [2]
+        date: null
+        required: false
+        paraphrase: "To season it, the assistant suggested oiling the skillet and baking it at 230 C for an hour."
+        decoy: "The user seasoned the skillet at 230 C."
+
+  # ── plans ──────────────────────────────────────────────────────────────
+  - id: plan-01
+    category: plan
+    at: "2026-05-02T13:00:00+00:00"
+    turns:
+      - {role: user, text: "We're planning to move to a bigger flat in September, probably somewhere near the river."}
+      - {role: assistant, text: "Good luck with the search! Want a checklist for the move?"}
+    facts:
+      - fact: "The user plans to move to a bigger flat in September."
+        keys: ["move", "moving", "flat"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: [null, "2026-09-01"]
+        paraphrase: "The user intends to relocate to a larger flat in September."
+        decoy: "The user moved to a smaller flat in September."
+
+  - id: plan-02
+    category: plan
+    at: "2026-05-05T08:00:00+00:00"
+    turns:
+      - {role: user, text: "I want to learn Spanish before our trip next year. Thinking 15 minutes a day."}
+      - {role: assistant, text: "Fifteen minutes daily is a great habit. A spaced-repetition app can help."}
+    facts:
+      - fact: "The user wants to learn Spanish, about 15 minutes a day."
+        keys: ["spanish"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user plans to study Spanish for roughly fifteen minutes each day."
+        decoy: "The user already speaks fluent Spanish."
+      - fact: "The assistant suggested a spaced-repetition app."
+        keys: ["spaced-repetition", "spaced repetition"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [2]
+        date: null
+        required: false
+        paraphrase: "A spaced repetition app was recommended by the assistant."
+        decoy: "The user uses a spaced-repetition app."
+
+  - id: plan-03
+    category: plan
+    at: "2026-05-08T17:45:00+00:00"
+    turns:
+      - {role: user, text: "I'm going to sign up for the city 10k in the autumn. Haven't run since university though."}
+      - {role: assistant, text: "A couch-to-10k plan over ten weeks would get you there."}
+    facts:
+      - fact: "The user plans to sign up for the city 10k race in the autumn."
+        keys: ["10k"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user intends to enter the city's 10k run this autumn."
+        decoy: "The user ran the city 10k last autumn."
+      - fact: "The user has not run since university."
+        keys: ["university"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        required: false
+        paraphrase: "The user hasn't gone running since their university days."
+        decoy: "The user ran competitively at university and still runs."
+
+  - id: plan-04
+    category: plan
+    at: "2026-05-11T20:10:00+00:00"
+    turns:
+      - {role: user, text: "Thinking about repainting the living room. Probably a sage green, not decided yet."}
+      - {role: assistant, text: "Sage green works well with natural wood and white trim."}
+    facts:
+      - fact: "The user is considering repainting the living room sage green."
+        keys: ["sage", "repaint", "repainting", "paint"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user is thinking of painting the living room in sage green."
+        decoy: "The user has painted the living room navy blue."
+
+  - id: plan-05
+    category: plan
+    at: "2026-05-14T09:30:00+00:00"
+    turns:
+      - {role: user, text: "Next month I'm starting a pottery class on Thursday evenings."}
+      - {role: assistant, text: "That sounds relaxing. Wear clothes you don't mind getting clay on."}
+    facts:
+      - fact: "The user is starting a pottery class on Thursday evenings next month."
+        keys: ["pottery"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: [null, "2026-06-01"]
+        paraphrase: "From next month the user will attend a Thursday-evening pottery class."
+        decoy: "The user quit a pottery class."
+
+  # ── state changes (old value -> new value) ─────────────────────────────
+  - id: state-01
+    category: state_change
+    at: "2026-06-01T10:00:00+00:00"
+    turns:
+      - {role: user, text: "Update: I switched from my old diesel hatchback to an electric car last month."}
+      - {role: assistant, text: "Congratulations! Do you have a charger at home?"}
+      - {role: user, text: "Yes, we had one installed in the garage."}
+    facts:
+      - fact: "The user switched from a diesel hatchback to an electric car."
+        keys: ["electric"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: [null, "2026-05-01"]
+        details: [["diesel", "hatchback"]]
+        paraphrase: "The user replaced their diesel hatchback with an electric car."
+        decoy: "The user switched from an electric car to a diesel hatchback."
+      - fact: "The user has a car charger installed in their garage."
+        keys: ["charger", "garage"]
+        speaker: user
+        trust: user_stated
+        turns: [3]
+        date: null
+        paraphrase: "A charger was installed in the user's garage."
+        decoy: "The user has no charger at home."
+
+  - id: state-02
+    category: state_change
+    at: "2026-06-03T15:00:00+00:00"
+    turns:
+      - {role: user, text: "I left the bank. I'm now a product manager at a small software company."}
+      - {role: assistant, text: "That's a big change! How are you finding it?"}
+    facts:
+      - fact: "The user changed jobs from working at a bank to being a product manager at a small software company."
+        keys: ["product manager"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        details: [["bank"]]
+        paraphrase: "The user left their job at a bank and now works as a product manager for a small software firm."
+        decoy: "The user left a software company to work at a bank."
+
+  - id: state-03
+    category: state_change
+    at: "2026-06-06T09:20:00+00:00"
+    turns:
+      - {role: user, text: "Remember I said I was on the 7:40 train? I now cycle to work instead."}
+      - {role: assistant, text: "Nice, cycling is a great way to start the day."}
+    facts:
+      - fact: "The user now cycles to work instead of taking the 7:40 train."
+        keys: ["cycle", "cycles", "cycling", "bike", "bicycle"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        details: [["train"]]
+        paraphrase: "Instead of the 7:40 train, the user now commutes by bike."
+        decoy: "The user now takes the train to work instead of cycling."
+
+  - id: state-04
+    category: state_change
+    at: "2026-06-09T19:40:00+00:00"
+    turns:
+      - {role: assistant, text: "Are you still doing the keto diet?"}
+      - {role: user, text: "No, I stopped that in spring. These days I just count calories."}
+    facts:
+      - fact: "The user stopped the keto diet and now counts calories."
+        keys: ["calories", "calorie", "keto"]
+        speaker: user
+        trust: user_stated
+        turns: [2]
+        date: null
+        details: [["keto"]]
+        paraphrase: "The user gave up keto in spring and counts calories instead."
+        decoy: "The user is still on the keto diet."
+
+  - id: state-05
+    category: state_change
+    at: "2026-06-12T11:30:00+00:00"
+    turns:
+      - {role: user, text: "Our team grew from four to nine people this quarter, so I'm managing two leads now."}
+      - {role: assistant, text: "That's fast growth. Delegating through the leads will matter."}
+    facts:
+      - fact: "The user's team grew from four to nine people this quarter."
+        keys: ["nine", "9"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        details: [["four", "4"]]
+        paraphrase: "The size of the user's team went from 4 to 9 people this quarter."
+        decoy: "The user's team shrank from nine to four people."
+      - fact: "The user manages two team leads."
+        keys: ["leads", "lead"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "Two leads now report to the user."
+        decoy: "The user reports to two team leads."
+
+  # ── dated events, absolute dates ───────────────────────────────────────
+  - id: abs-01
+    category: dated_absolute
+    at: "2026-03-10T09:00:00+00:00"
+    turns:
+      - {role: user, text: "I renewed my driving licence on March 3rd, so that's sorted for another ten years."}
+      - {role: assistant, text: "Great, one less thing to worry about."}
+    facts:
+      - fact: "The user renewed their driving licence."
+        keys: ["licence", "license"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: "2026-03-03"
+        paraphrase: "The user's driving license was renewed."
+        decoy: "The user's driving licence expired."
+
+  - id: abs-02
+    category: dated_absolute
+    at: "2026-04-01T18:00:00+00:00"
+    turns:
+      - {role: user, text: "My sister's wedding is on 14 June and I'm giving a speech. Help me start it?"}
+      - {role: assistant, text: "Of course. Open with a short story from your childhood together."}
+    facts:
+      - fact: "The user's sister is getting married."
+        keys: ["wedding", "married", "marry"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: "2026-06-14"
+        paraphrase: "The user's sister has her wedding coming up."
+        decoy: "The user is getting married."
+      - fact: "The user is giving a speech at their sister's wedding."
+        keys: ["speech"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: ["2026-06-14", null]
+        paraphrase: "The user will make a speech at the sister's wedding."
+        decoy: "The user's sister is giving a speech at the user's wedding."
+
+  - id: abs-03
+    category: dated_absolute
+    at: "2026-02-02T20:00:00+00:00"
+    turns:
+      - {role: user, text: "We moved into the new flat on 2026-01-15 and the boiler has already broken twice."}
+      - {role: assistant, text: "That's frustrating. Is the landlord responsible for repairs?"}
+    facts:
+      - fact: "The user moved into a new flat."
+        keys: ["moved", "flat"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: "2026-01-15"
+        paraphrase: "The user has moved into their new flat."
+        decoy: "The user moved out of the flat."
+      - fact: "The boiler in the user's new flat has broken twice."
+        keys: ["boiler"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The new flat's boiler broke down two times."
+        decoy: "The boiler in the user's flat was replaced."
+
+  - id: abs-04
+    category: dated_absolute
+    at: "2026-07-20T12:00:00+00:00"
+    turns:
+      - {role: user, text: "Note for later: my passport expires on September 30, 2027."}
+      - {role: assistant, text: "Noted. I'll remind you six months before."}
+    facts:
+      - fact: "The user's passport expires."
+        keys: ["passport"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: "2027-09-30"
+        paraphrase: "The passport of the user will expire."
+        decoy: "The user renewed their passport."
+
+  # ── dated events, relative dates ───────────────────────────────────────
+  - id: rel-01
+    category: dated_relative
+    at: "2026-05-20T14:00:00+00:00"
+    turns:
+      - {role: user, text: "I bought a blue road bike yesterday! Now I need a helmet."}
+      - {role: assistant, text: "Congrats! Look for a helmet with a MIPS liner."}
+    facts:
+      - fact: "The user bought a blue road bike."
+        keys: ["road bike", "bike", "bicycle"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: "2026-05-19"
+        paraphrase: "The user purchased a road bike that is blue."
+        decoy: "The user sold a blue road bike."
+      - fact: "The user needs a bike helmet."
+        keys: ["helmet"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        required: false
+        paraphrase: "The user is looking to get a helmet."
+        decoy: "The user bought a helmet."
+      - fact: "The assistant suggested a helmet with a MIPS liner."
+        keys: ["mips"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [2]
+        date: null
+        required: false
+        paraphrase: "A helmet with MIPS was recommended by the assistant."
+        decoy: "The user owns a MIPS helmet."
+
+  - id: rel-02
+    category: dated_relative
+    at: "2026-06-11T09:00:00+00:00"
+    turns:
+      - {role: user, text: "Two weeks ago I ran my first half marathon. My knees are still complaining."}
+      - {role: assistant, text: "Well done! Gentle cycling or swimming can help the recovery."}
+    facts:
+      - fact: "The user ran their first half marathon."
+        keys: ["half marathon", "half-marathon"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: "2026-05-28"
+        paraphrase: "The user completed a half marathon for the first time."
+        decoy: "The user ran their first full marathon."
+
+  - id: rel-03
+    category: dated_relative
+    at: "2026-07-02T10:15:00+00:00"
+    turns:
+      - {role: user, text: "Last Tuesday I had my wisdom tooth out. Can I eat solid food yet?"}
+      - {role: assistant, text: "Usually soft food for about a week, then ease back into solids."}
+    facts:
+      - fact: "The user had a wisdom tooth removed."
+        keys: ["wisdom tooth", "tooth"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: "2026-06-30"
+        paraphrase: "The user's wisdom tooth was taken out."
+        decoy: "The user has a wisdom tooth extraction booked."
+
+  - id: rel-04
+    category: dated_relative
+    at: "2026-09-17T16:00:00+00:00"
+    turns:
+      - {role: user, text: "I'm flying to Kyoto in three weeks for a conference. What should I pack?"}
+      - {role: assistant, text: "Layers, comfortable walking shoes and a compact umbrella."}
+    facts:
+      - fact: "The user is flying to Kyoto for a conference."
+        keys: ["kyoto"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: "2026-10-08"
+        paraphrase: "The user will fly to Kyoto to attend a conference."
+        decoy: "The user flew back from Kyoto after a conference."
+      - fact: "The assistant suggested packing layers, comfortable walking shoes and a compact umbrella."
+        keys: ["layers", "umbrella", "walking shoes"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [2]
+        date: null
+        required: false
+        details: [["layers"], ["shoes"], ["umbrella"]]
+        paraphrase: "The assistant recommended taking layers, walking shoes and an umbrella."
+        decoy: "The user packed an umbrella."
+
+  - id: rel-05
+    category: dated_relative
+    at: "2026-08-10T23:30:00-05:00"
+    turns:
+      - {role: user, text: "The day before yesterday I sprained my ankle playing football. It's still swollen."}
+      - {role: assistant, text: "Rest, ice, compression and elevation. See a doctor if it doesn't improve."}
+    facts:
+      - fact: "The user sprained their ankle playing football."
+        keys: ["ankle", "sprained", "sprain"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: "2026-08-08"
+        paraphrase: "While playing football the user sprained an ankle."
+        decoy: "The user broke their wrist playing football."
+
+  - id: rel-06
+    category: dated_relative
+    at: "2026-10-05T19:00:00+00:00"
+    turns:
+      - {role: user, text: "Tomorrow I start my new job! And I have a dentist appointment next Friday, ugh."}
+      - {role: assistant, text: "Good luck tomorrow! I can remind you about the dentist."}
+    facts:
+      - fact: "The user starts a new job."
+        keys: ["job"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: "2026-10-06"
+        paraphrase: "The user begins their new job."
+        decoy: "The user quits their job."
+      - fact: "The user has a dentist appointment."
+        keys: ["dentist"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: ["2026-10-09", "2026-10-16"]
+        paraphrase: "The user is booked in to see the dentist."
+        decoy: "The user cancelled a dentist appointment."
+
+  # ── assistant recommendations ──────────────────────────────────────────
+  - id: rec-01
+    category: recommendation
+    at: "2026-04-22T12:00:00+00:00"
+    turns:
+      - {role: user, text: "Where should I go for a long weekend in Portugal?"}
+      - {role: assistant, text: "Three options: Lisbon for food and nightlife, Porto for wine cellars, and the Algarve for beaches."}
+    facts:
+      - fact: "The assistant recommended three places for a long weekend in Portugal: Lisbon for food and nightlife, Porto for wine cellars and the Algarve for beaches."
+        keys: ["lisbon", "porto", "algarve"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [2]
+        date: null
+        details: [["lisbon"], ["porto"], ["algarve"]]
+        paraphrase: "For a Portuguese long weekend the assistant suggested Lisbon, Porto or the Algarve."
+        decoy: "The user booked a long weekend in Lisbon."
+
+  - id: rec-02
+    category: recommendation
+    at: "2026-04-25T09:10:00+00:00"
+    turns:
+      - {role: user, text: "My tomato plants have yellow leaves at the bottom."}
+      - {role: assistant, text: "That is usually overwatering or a nitrogen shortage. Water only when the top inch is dry and add a balanced feed."}
+    facts:
+      - fact: "The user's tomato plants have yellow lower leaves."
+        keys: ["tomato", "yellow"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The bottom leaves on the user's tomato plants are yellowing."
+        decoy: "The user's tomato plants have black spots on the fruit."
+      - fact: "The assistant suggested watering only when the top inch of soil is dry and adding a balanced feed."
+        keys: ["top inch", "balanced feed", "overwatering", "nitrogen"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [2]
+        date: null
+        paraphrase: "The assistant advised watering when the top inch is dry and using a balanced fertiliser feed."
+        decoy: "The user waters the tomatoes only when the top inch is dry."
+
+  - id: rec-03
+    category: recommendation
+    at: "2026-04-28T21:00:00+00:00"
+    turns:
+      - {role: user, text: "Give me a few board games for four adults."}
+      - {role: assistant, text: "Try these four: a tile-laying game, a cooperative pandemic game, a word-guessing party game and a train-route game."}
+      - {role: user, text: "We already own the train one."}
+    facts:
+      - fact: "The assistant suggested four board games for four adults: a tile-laying game, a cooperative pandemic game, a word-guessing party game and a train-route game."
+        keys: ["tile-laying", "tile laying", "pandemic", "word-guessing", "word guessing", "train"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [2]
+        date: null
+        details: [["tile"], ["pandemic"], ["word"], ["train"]]
+        paraphrase: "The assistant listed four games: tile-laying, cooperative pandemic, word-guessing and train routes."
+        decoy: "The user owns a cooperative pandemic game."
+      - fact: "The user already owns the train-route board game."
+        keys: ["train", "own", "owns"]
+        speaker: user
+        trust: user_stated
+        turns: [3]
+        date: null
+        paraphrase: "The user has the train-route game already."
+        decoy: "The user wants to buy the train-route game."
+
+  - id: rec-04
+    category: recommendation
+    at: "2026-05-01T07:30:00+00:00"
+    turns:
+      - {role: user, text: "I get headaches most afternoons at work."}
+      - {role: assistant, text: "Common causes are dehydration and screen glare. Drink water through the day and take a short break from the screen every hour. See a doctor if they persist."}
+    facts:
+      - fact: "The user gets headaches most afternoons at work."
+        keys: ["headache", "headaches"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "Most afternoons at work the user suffers from headaches."
+        decoy: "The user gets migraines every morning."
+      - fact: "The assistant suggested drinking more water and taking a short screen break every hour."
+        keys: ["water", "break", "screen"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [2]
+        date: null
+        paraphrase: "The assistant recommended staying hydrated and stepping away from the screen hourly."
+        decoy: "The user takes a screen break every hour."
+
+  - id: rec-05
+    category: recommendation
+    at: "2026-05-03T14:00:00+00:00"
+    turns:
+      - {role: user, text: "Which of these two savings accounts is better, the 3.1% one with notice or the 2.6% instant access?"}
+      - {role: assistant, text: "If you might need the money within the year, take the 2.6% instant-access account; otherwise the 3.1% notice account earns more."}
+    facts:
+      - fact: "The assistant recommended the 2.6% instant-access account if the money may be needed within the year, otherwise the 3.1% notice account."
+        keys: ["2.6", "3.1", "instant-access", "instant access", "notice"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [2]
+        date: null
+        paraphrase: "The assistant said to pick the instant-access account at 2.6% when the money might be needed soon, and the 3.1% notice account otherwise."
+        decoy: "The user opened the 3.1% notice account."
+      - fact: "The user is choosing between a 3.1% notice savings account and a 2.6% instant-access account."
+        keys: ["3.1", "2.6", "savings"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        required: false
+        paraphrase: "The user is comparing a notice account at 3.1% with an instant-access account at 2.6%."
+        decoy: "The user has a 3.1% notice savings account."
+
+  # ── pasted and relayed third-party content ─────────────────────────────
+  - id: paste-01
+    category: pasted
+    at: "2026-06-15T10:00:00+00:00"
+    third_party_turns: [1]
+    turns:
+      - role: user
+        text: |
+          Can you summarise this for me? Here's an email I got:
+          From: lettings@example.com
+          Subject: Rent review
+          Dear tenant, the rent for your flat will rise to 1,250 per month from 1 August. The building's lift will be replaced in October.
+      - {role: assistant, text: "Summary: your rent goes up to 1,250 a month from 1 August, and the lift is being replaced in October."}
+    facts:
+      - fact: "The rent for the user's flat will rise to 1,250 per month from 1 August."
+        keys: ["1,250", "1250", "rent"]
+        speaker: [user, assistant]
+        trust: [external, agent_generated]
+        turns: [1, 2]
+        date: [null, "2026-08-01"]
+        required: false
+        paraphrase: "From 1 August the rent on the user's flat goes up to 1,250 a month."
+        decoy: "The user's rent will fall to 1,250 per month."
+      - fact: "The building's lift will be replaced in October."
+        keys: ["lift"]
+        speaker: [user, assistant]
+        trust: [external, agent_generated]
+        turns: [1, 2]
+        date: [null, "2026-10-01"]
+        required: false
+        paraphrase: "In October the lift in the building is being replaced."
+        decoy: "The building's lift was repaired in October."
+
+  - id: paste-02
+    category: pasted
+    at: "2026-06-18T19:30:00+00:00"
+    third_party_turns: [1]
+    turns:
+      - role: user
+        text: |
+          My neighbour wrote:
+          > I'm selling my lawnmower for 80, it's three years old and works perfectly.
+          I already have a mower, but I'm tempted. Is 80 a good price?
+      - {role: assistant, text: "For a three-year-old mower in good condition, 80 is a fair price."}
+    facts:
+      - fact: "The user already has a lawnmower."
+        keys: ["mower", "lawnmower"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user owns a mower already."
+        decoy: "The user is selling their lawnmower."
+      - fact: "The user's neighbour is selling a three-year-old lawnmower for 80."
+        keys: ["neighbour", "selling", "80"]
+        speaker: user
+        trust: external
+        turns: [1]
+        date: null
+        required: false
+        paraphrase: "A three-year-old lawnmower is being sold by the user's neighbour for 80."
+        decoy: "The user's neighbour bought a lawnmower for 80."
+
+  - id: paste-03
+    category: pasted
+    at: "2026-06-21T08:45:00+00:00"
+    third_party_turns: [1]
+    turns:
+      - role: user
+        text: |
+          ---------- Forwarded message ---------
+          From: Coach Erin <coach@example.org>
+          Date: Sat, 20 Jun 2026
+          Subject: Season update
+          Training moves to Wednesdays at 6pm. I am stepping down as head coach at the end of the season.
+      - {role: user, text: "What do you make of that? My son plays in that team."}
+      - {role: assistant, text: "Sounds like a schedule change and a new head coach next season."}
+    facts:
+      - fact: "The user's son plays in the team."
+        keys: ["son"]
+        speaker: user
+        trust: user_stated
+        turns: [2]
+        date: null
+        paraphrase: "The user has a son who plays on that team."
+        decoy: "The user coaches the team."
+      - fact: "Coach Erin is stepping down as head coach at the end of the season."
+        keys: ["stepping down", "step down", "head coach"]
+        speaker: user
+        trust: external
+        turns: [1]
+        date: null
+        required: false
+        paraphrase: "Erin will step down from head coach once the season ends."
+        decoy: "The user is stepping down as head coach."
+      - fact: "Training moves to Wednesdays at 6pm."
+        keys: ["wednesday", "wednesdays", "6pm", "6 pm"]
+        speaker: user
+        trust: external
+        turns: [1]
+        date: null
+        required: false
+        paraphrase: "The team's training will now be on Wednesdays at 6 pm."
+        decoy: "Training moves to Saturdays at 6pm."
+
+  - id: paste-04
+    category: pasted
+    at: "2026-06-24T13:15:00+00:00"
+    third_party_turns: [1]
+    turns:
+      - role: user
+        text: |
+          Here is an article I'm reading:
+          The author says she gave up sugar for a year and lost 12 kilos, and now runs ultramarathons.
+          Do you think that's realistic?
+      - {role: assistant, text: "Losing 12 kilos in a year by cutting sugar is plausible for some people; ultramarathons take years of training."}
+    facts:
+      - fact: "The article's author gave up sugar for a year and lost 12 kilos."
+        keys: ["sugar", "12"]
+        speaker: user
+        trust: external
+        turns: [1]
+        date: null
+        required: false
+        paraphrase: "According to the article, its author lost 12 kg after a year without sugar."
+        decoy: "The user gave up sugar for a year and lost 12 kilos."
+      - fact: "The article's author runs ultramarathons."
+        keys: ["ultramarathon", "ultramarathons"]
+        speaker: user
+        trust: external
+        turns: [1]
+        date: null
+        required: false
+        paraphrase: "The author of the article now runs ultramarathons."
+        decoy: "The user runs ultramarathons."
+
+  - id: paste-05
+    category: pasted
+    at: "2026-06-27T17:00:00+00:00"
+    third_party_turns: [1]
+    turns:
+      - role: user
+        text: |
+          Translate this text from my landlord into plain English please:
+          "Tenant must vacate premises by 31 August for renovation works; deposit returned within 14 days."
+      - {role: assistant, text: "Your landlord says you must move out by 31 August because of renovations, and your deposit comes back within 14 days."}
+    facts:
+      - fact: "The user's landlord says the user must move out by 31 August for renovations."
+        keys: ["vacate", "move out", "31 august", "renovation", "renovations"]
+        speaker: [user, assistant]
+        trust: [external, agent_generated]
+        turns: [1, 2]
+        date: [null, "2026-08-31"]
+        required: false
+        paraphrase: "According to the landlord, the user has to leave by 31 August because of renovation works."
+        decoy: "The user wants to move out by 31 August."
+      - fact: "The user's deposit will be returned within 14 days."
+        keys: ["deposit"]
+        speaker: [user, assistant]
+        trust: [external, agent_generated]
+        turns: [1, 2]
+        date: null
+        required: false
+        paraphrase: "The landlord will give back the deposit within 14 days."
+        decoy: "The user lost their deposit."
+
+  # ── several speakers: guests in a shared chat ──────────────────────────
+  - id: guest-01
+    category: guests
+    at: "2026-07-05T18:00:00+00:00"
+    turns:
+      - {role: user, text: "Bob and I are planning a dinner party. I'll cook, he's doing dessert."}
+      - {role: user, speaker: Bob, owner: false, text: "Yes, and just so you know, I'm allergic to peanuts."}
+      - {role: assistant, text: "Noted. I'll keep peanuts out of the menu ideas."}
+    facts:
+      - fact: "The user is cooking for a dinner party with Bob."
+        keys: ["dinner party", "cook", "cooking"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user will do the cooking for the dinner party they are planning with Bob."
+        decoy: "Bob is cooking the main course for the dinner party."
+      - fact: "Bob is allergic to peanuts."
+        keys: ["peanut", "peanuts"]
+        speaker: Bob
+        trust: external
+        turns: [2]
+        date: null
+        paraphrase: "Bob has a peanut allergy."
+        decoy: "The user is allergic to peanuts."
+
+  - id: guest-02
+    category: guests
+    at: "2026-07-08T12:30:00+00:00"
+    turns:
+      - {role: user, speaker: Carol, owner: false, text: "Hi, I'm Carol, Alice's colleague. I just moved to Riverton last week."}
+      - {role: user, text: "Carol's joining our book club. I run it on the first Monday of each month."}
+      - {role: assistant, text: "Welcome, Carol! I can share the reading list."}
+    facts:
+      - fact: "Carol moved to Riverton."
+        keys: ["riverton"]
+        speaker: Carol
+        trust: external
+        turns: [1]
+        date: [null, "2026-07-01"]
+        paraphrase: "Carol has recently relocated to Riverton."
+        decoy: "The user moved to Riverton."
+      - fact: "The user runs a book club on the first Monday of each month."
+        keys: ["book club"]
+        speaker: user
+        trust: user_stated
+        turns: [2]
+        date: null
+        paraphrase: "On the first Monday of every month the user hosts a book club."
+        decoy: "Carol runs the book club."
+      - fact: "Carol is joining the user's book club."
+        keys: ["joining", "join", "book club"]
+        speaker: user
+        trust: user_stated
+        turns: [2]
+        date: null
+        required: false
+        paraphrase: "Carol will be a member of the user's book club."
+        decoy: "Carol is leaving the book club."
+
+  - id: guest-03
+    category: guests
+    at: "2026-07-11T20:00:00+00:00"
+    turns:
+      - {role: user, speaker: Dana, owner: false, text: "I'm vegan, so please no dairy in the recipes."}
+      - {role: user, text: "I'm not vegan myself but happy to cook vegan for Dana."}
+      - {role: assistant, text: "Here's a vegan lentil shepherd's pie that works for both of you."}
+    facts:
+      - fact: "Dana is vegan."
+        keys: ["vegan"]
+        speaker: Dana
+        trust: external
+        turns: [1]
+        date: null
+        paraphrase: "Dana follows a vegan diet."
+        decoy: "Dana eats dairy."
+      - fact: "The user is not vegan."
+        keys: ["vegan"]
+        speaker: user
+        trust: user_stated
+        turns: [2]
+        date: null
+        paraphrase: "The user does not follow a vegan diet themselves."
+        decoy: "The user is vegan."
+      - fact: "The assistant suggested a vegan lentil shepherd's pie."
+        keys: ["lentil", "shepherd"]
+        speaker: assistant
+        trust: agent_generated
+        turns: [3]
+        date: null
+        required: false
+        paraphrase: "A vegan lentil shepherd's pie was proposed by the assistant."
+        decoy: "Dana cooked a lentil shepherd's pie."
+
+  - id: guest-04
+    category: guests
+    at: "2026-07-14T09:00:00+00:00"
+    turns:
+      - {role: user, speaker: Bob, owner: false, text: "I sold my motorbike yesterday, so I need a lift to the airport on Friday."}
+      - {role: user, text: "I can drive you, Bob. I work from home on Fridays anyway."}
+    facts:
+      - fact: "Bob sold his motorbike."
+        keys: ["motorbike", "motorcycle"]
+        speaker: Bob
+        trust: external
+        turns: [1]
+        date: "2026-07-13"
+        paraphrase: "Bob has sold his motorcycle."
+        decoy: "The user sold their motorbike."
+      - fact: "The user works from home on Fridays."
+        keys: ["from home", "home"]
+        speaker: user
+        trust: user_stated
+        turns: [2]
+        date: null
+        paraphrase: "On Fridays the user works from home."
+        decoy: "Bob works from home on Fridays."
+      - fact: "The user will drive Bob to the airport on Friday."
+        keys: ["airport", "drive"]
+        speaker: user
+        trust: user_stated
+        turns: [2]
+        date: [null, "2026-07-17"]
+        required: false
+        paraphrase: "The user is giving Bob a lift to the airport on Friday."
+        decoy: "Bob will drive the user to the airport."
+
+  # ── filler: nothing to remember ────────────────────────────────────────
+  - id: filler-01
+    category: filler
+    at: "2026-08-01T09:00:00+00:00"
+    turns:
+      - {role: user, text: "Hi there!"}
+      - {role: assistant, text: "Hello! How can I help today?"}
+      - {role: user, text: "Nothing yet, just saying hi. Thanks!"}
+    facts: []
+
+  - id: filler-02
+    category: filler
+    at: "2026-08-02T15:00:00+00:00"
+    turns:
+      - {role: user, text: "What's the boiling point of water at sea level?"}
+      - {role: assistant, text: "100 degrees Celsius, or 212 degrees Fahrenheit."}
+      - {role: user, text: "Thanks."}
+    facts: []
+
+  - id: filler-03
+    category: filler
+    at: "2026-08-03T11:00:00+00:00"
+    turns:
+      - {role: user, text: "Can you rephrase this sentence to sound more formal: 'we gotta push the meeting'."}
+      - {role: assistant, text: "\"We need to postpone the meeting.\""}
+      - {role: user, text: "Perfect, cheers."}
+    facts: []
+
+  - id: filler-04
+    category: filler
+    at: "2026-08-04T22:00:00+00:00"
+    turns:
+      - {role: user, text: "How many days are there in a leap year?"}
+      - {role: assistant, text: "366."}
+      - {role: user, text: "Ok thanks, goodnight."}
+      - {role: assistant, text: "Goodnight!"}
+    facts: []
+
+  - id: filler-05
+    category: filler
+    at: "2026-08-05T10:30:00+00:00"
+    turns:
+      - {role: user, text: "Tell me a joke about cats."}
+      - {role: assistant, text: "Why did the cat sit on the computer? To keep an eye on the mouse."}
+      - {role: user, text: "Haha, good one."}
+    facts: []

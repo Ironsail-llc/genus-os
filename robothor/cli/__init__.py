@@ -891,9 +891,36 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Append each judged case to this JSONL; rerunning with it resumes",
     )
     memeval_parser.add_argument(
+        "--extraction",
+        action="store_true",
+        help="Measure conversation fact extraction on the labelled set (no database)",
+    )
+    memeval_parser.add_argument(
+        "--fixtures",
+        default="docs/benchmarks/memory/conversation-facts.yaml",
+        help="With --extraction: the labelled conversations",
+    )
+    memeval_parser.add_argument(
+        "--baseline",
+        default=None,
+        help="With --extraction: compare against this recorded baseline; exit 2 on a regression",
+    )
+    memeval_parser.add_argument(
+        "--from-report",
+        action="append",
+        default=None,
+        help="With --extraction --record-baseline: record from this saved run report (repeatable)",
+    )
+    memeval_parser.add_argument(
+        "--extraction-model",
+        default=None,
+        help="With --extraction: the local model that extracts (default: the generation model)",
+    )
+    memeval_parser.add_argument(
         "--record-baseline",
         action="store_true",
-        help="Also write the report as the recorded world baseline under docs/benchmarks/memory/",
+        help="Write the report as the recorded baseline (world: under docs/benchmarks/memory/; "
+        "extraction: to --baseline, or beside the fixtures)",
     )
 
     # memory-replay — read-only dry run: real questions, today's recall vs the new

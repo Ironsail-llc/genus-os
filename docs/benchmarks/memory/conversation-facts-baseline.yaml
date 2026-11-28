@@ -1,0 +1,56 @@
+# The recorded baseline for `robothor memory-eval --extraction --baseline <this file>`
+# (EXTRACTION.md beside it). Written by `--record-baseline`; edit only the
+# thresholds block by hand.
+#
+# metrics: pooled over `runs` repeats of the split on `model`. Counts
+#   (misattributed_to_operator, guest_as_user, filler_facts) are per run.
+# tolerance: how far a run may move the wrong way before it is a regression
+#   (exit 2): the spread of the recorded runs (max - min), rounded up to a
+#   whole point for a rate and a whole count for a count, at least one unit.
+# thresholds: PROPOSED, pending the operator's agreement. Reported as met or
+#   not met; they never fail a run while their status is PROPOSED.
+version: 1
+suite_id: conversation-facts-v1
+model: qwen3:8b
+judge_model: qwen3:8b
+split: dev
+runs: 3
+metrics:
+  recall: 0.8545
+  precision: 0.625
+  trust_accuracy: 0.9396
+  speaker_accuracy: 0.9835
+  turn_accuracy: 0.978
+  date_accuracy: 0.5659
+  dated_correct_rate: 0.7358
+  undated_left_undated_rate: 0.4961
+  user_stated_precision: 0.879
+  misattributed_to_operator: 1.6667
+  guest_as_user: 5.0
+  filler_facts: 0.0
+tolerance:
+  recall: 0.11
+  precision: 0.08
+  trust_accuracy: 0.06
+  speaker_accuracy: 0.05
+  turn_accuracy: 0.05
+  date_accuracy: 0.09
+  dated_correct_rate: 0.05
+  undated_left_undated_rate: 0.1
+  user_stated_precision: 0.03
+  misattributed_to_operator: 1.0
+  guest_as_user: 3.0
+  filler_facts: 1.0
+thresholds:
+  status: PROPOSED
+  note: Pending the operator's agreement. Reported as met or not met; they do not
+    fail a run until agreed.
+  min:
+    recall: 0.85
+    trust_accuracy: 0.95
+    user_stated_precision: 0.9
+    dated_correct_rate: 0.9
+    undated_left_undated_rate: 0.9
+  max:
+    misattributed_to_operator: 0
+    guest_as_user: 0

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from robothor.memory.eval import (
     EVAL_TENANT,
@@ -23,12 +23,23 @@ from robothor.memory.eval import (
     run_suite,
 )
 from robothor.memory.eval_answer import format_answers_markdown, run_answers
+from robothor.memory.eval_extraction import (
+    compare_to_baseline,
+    format_extraction_markdown,
+    load_baseline,
+    report_from_saved,
+    run_extraction_eval,
+    write_baseline,
+)
 from robothor.memory.eval_world_seed import WORLD_TENANT, format_world_report, run_world
 
 if TYPE_CHECKING:
     import argparse
 
 _DEFAULT_SUITE = "docs/benchmarks/memory/suite.yaml"
+
+#: The extraction baseline's file name, beside the fixtures.
+BASELINE_NAME = "conversation-facts-baseline.yaml"
 
 #: Where --record-baseline writes the world answer-arm baseline.
 BASELINE_DIR = Path("docs/benchmarks/memory")
@@ -42,6 +53,11 @@ def cmd_memory_eval(args: argparse.Namespace) -> int:
     eval sit broken behind row-level security while still looking like an
     ordinary failing test.
     """
+    if getattr(args, "extraction", False):
+        if getattr(args, "world", False) or getattr(args, "answers", False):
+            print("memory-eval cannot run: --extraction runs on its own, not with --world")
+            return 3
+        return _cmd_extraction(args)
     if getattr(args, "answers", False):
         if not getattr(args, "world", False):
             print("memory-eval cannot run: --answers needs --world")
@@ -223,4 +239,105 @@ def _cmd_answers(args: argparse.Namespace) -> int:
         )
         (BASELINE_DIR / "world-baseline.md").write_text(markdown, encoding="utf-8")
         print(f"recorded baseline under {BASELINE_DIR}")
+    return 0
+
+
+def _write_report(
+    report: dict[str, Any], markdown: str, report_path: str | None, *, quiet: bool = False
+) -> None:
+    """The JSON report and its Markdown summary to ``report_path``, or stdout.
+    ``quiet`` saves the files and prints nothing (a save before anything else
+    can fail)."""
+    import json
+
+    payload = json.dumps(report, indent=2, default=str)
+    if report_path:
+        path = Path(report_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(payload + "\n", encoding="utf-8")
+        path.with_suffix(".md").write_text(markdown, encoding="utf-8")
+        if quiet:
+            return
+        print(markdown)
+        print(f"report: {path} (summary: {path.with_suffix('.md')})")
+    else:
+        print(payload)
+        print("\n<!-- markdown -->\n")
+        print(markdown)
+
+
+def _cmd_extraction(args: argparse.Namespace) -> int:
+    """Measure conversation fact extraction on the labelled set.
+
+    No database and no tenant: the real extraction is a model call and a
+    parse, scored against hand labels by the validated judge. Exit 0 when it
+    ran, 3 when it could not (labels invalid, the judge failed validation, or a
+    named model that remote generation would ignore, or a baseline for
+    another model or split). With ``--baseline`` the run is compared against
+    that recorded baseline and exits 2 when a metric regressed beyond its
+    tolerance; its PROPOSED thresholds are reported and never change the exit
+    code. ``--record-baseline`` writes this run as the baseline instead, or,
+    with ``--from-report``, the saved run reports given, without running the
+    model. The run's report is saved before any comparison or recording, so a
+    baseline that cannot be read, compared or written never loses the run: it
+    exits 3 with the reason. Never recorded to benchmark_results.
+    """
+    fixtures = Path(args.fixtures)
+    if not fixtures.exists():
+        print(f"Fixtures not found: {fixtures}")
+        return 3
+    baseline_path = getattr(args, "baseline", None)
+    target = baseline_path or str(fixtures.with_name(BASELINE_NAME))
+    saved = getattr(args, "from_report", None) or []
+    if saved:
+        if not getattr(args, "record_baseline", False):
+            print("memory-eval cannot run: --from-report is for --record-baseline")
+            return 3
+        try:
+            write_baseline(target, report_from_saved(saved, fixtures))
+        except (OSError, ValueError, KeyError) as e:
+            print(f"memory-eval cannot record the baseline: {e}")
+            return 3
+        print(f"recorded baseline: {target} (from {len(saved)} saved report(s))")
+        return 0
+    try:
+        report = asyncio.run(
+            run_extraction_eval(
+                fixtures,
+                model=args.extraction_model,
+                judge_model=args.judge_model,
+                repeats=args.repeats,
+                concurrency=args.concurrency,
+            )
+        )
+    except (EvalPreconditionError, ValueError) as e:
+        print(f"memory-eval cannot run: {e}")
+        return 3
+    if args.report:  # saved first: nothing below may lose the run
+        _write_report(report, format_extraction_markdown(report), args.report, quiet=True)
+    if getattr(args, "record_baseline", False):
+        try:
+            write_baseline(target, report)
+        except (OSError, ValueError, KeyError) as e:
+            if not args.report:
+                _write_report(report, format_extraction_markdown(report), None)
+            print(f"memory-eval cannot record the baseline at {target}: {e}")
+            return 3
+        _write_report(report, format_extraction_markdown(report), args.report)
+        print(f"recorded baseline: {target}")
+        return 0
+    if baseline_path:
+        try:
+            report["baseline_comparison"] = compare_to_baseline(
+                report, load_baseline(baseline_path)
+            )
+        except (EvalPreconditionError, ValueError, KeyError) as e:
+            if not args.report:
+                _write_report(report, format_extraction_markdown(report), None)
+            print(f"memory-eval cannot compare against {baseline_path}: {e}")
+            return 3
+    _write_report(report, format_extraction_markdown(report), args.report)
+    if report.get("baseline_comparison", {}).get("regressed"):
+        print("REGRESSED against the recorded baseline")
+        return 2
     return 0
