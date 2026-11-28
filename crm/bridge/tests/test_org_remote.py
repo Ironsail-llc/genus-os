@@ -596,3 +596,25 @@ def test_a_write_with_an_unknown_outcome_is_audited_as_unknown(engine, audit_row
     assert response.json()["outcome_unknown"] is True
     (row,) = [r for r in audit_rows if r["event_type"] == "org.remote_call"]
     assert row["status"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("answer", "status"),
+    [
+        ((500, {"error": "engine returned a non-JSON response"}), "unknown"),
+        ((503, {"detail": "x"}), "unknown"),
+        ((200, {"outcome": "something_new"}), "unknown"),
+        ((403, {"error": "remote_write_forbidden", "message": "Owners only."}), "denied"),
+        ((409, {"error": "remote_request_mismatch", "message": "Other call."}), "denied"),
+        ((200, {"outcome": "ok", "result": {}}), "ok"),
+    ],
+)
+def test_a_writes_audit_says_unknown_unless_it_is_a_clean_answer(
+    engine, audit_rows, answer, status
+):
+    engine.answers[CHILD_A] = answer
+
+    _engine_client().post(CALL, json=_body(access="write", request_id="eff-1"))
+
+    (row,) = [r for r in audit_rows if r["event_type"] == "org.remote_call"]
+    assert row["status"] == status

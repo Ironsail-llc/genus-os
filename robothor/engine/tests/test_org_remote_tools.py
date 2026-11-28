@@ -115,6 +115,8 @@ class _Bridge:
                     "would": None,
                 },
             )
+        if isinstance(body, bytes):
+            return httpx.Response(status, content=body)
         return httpx.Response(status, json=body)
 
     @staticmethod
@@ -787,3 +789,82 @@ def test_a_bridge_refusal_says_what_to_fix_and_is_not_a_target_code(env):
     assert sentence in result["error"]
     assert result["error"].startswith("The bridge refused the call")
     assert result["error_code"] is None
+
+
+# ── A write the home side cannot read as a clean refusal is unknown ─────────
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        (500, {"error": "internal_error", "message": "the call failed"}),
+        (500, b"Internal Server Error"),
+        (200, b"<html>not json</html>"),
+        (200, ["not", "an", "object"]),
+        (200, {"outcome": "something_new", "result": {}}),
+        (418, {"error": "teapot"}),
+        (503, {"detail": "upstream"}),
+        (413, {"error": "remote_too_large", "message": "too big"}),
+    ],
+    ids=lambda a: f"{a[0]}-{type(a[1]).__name__}",
+)
+def test_a_write_answer_that_is_not_a_clean_refusal_is_unknown(env, answer):
+    env.bridge.answer = answer
+
+    result = _call("org_tool_write", _write())
+
+    assert result["outcome_unknown"] is True, result
+    assert result["retryable"] is False
+    (row,) = _rows(env)
+    assert row["outcome"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        (403, {"error": "remote_write_forbidden", "message": "Owners only."}),
+        (403, {"error": "remote_not_permitted", "message": "No."}),
+        (
+            403,
+            {"error": "remote_attestation_missing", "message": "Needs baa.", "attestation": "baa"},
+        ),
+        (404, {"error": "remote_tool_unknown", "message": "No such tool."}),
+        (404, {"error": "remote_not_permitted", "message": "Unreachable."}),
+        (409, {"error": "remote_access_mismatch", "message": "Read only."}),
+        (409, {"error": "remote_request_mismatch", "message": "Other call."}),
+        (422, {"error": "remote_bad_arguments", "message": "Bad."}),
+        (401, {"error": "token expired"}),  # the bridge's own gate: nothing was sent
+        (403, {"error": "scope missing"}),
+    ],
+    ids=lambda a: f"{a[0]}-{a[1].get('error')}",
+)
+def test_a_clean_refusal_of_a_write_is_not_unknown(env, answer):
+    env.bridge.answer = answer
+
+    result = _call("org_tool_write", _write())
+
+    assert "outcome_unknown" not in result
+    (row,) = _rows(env)
+    assert row["outcome"] == "denied"
+
+
+def test_a_500_on_a_write_is_fenced_in_the_effect_ledger(env, ledger):
+    env.bridge.answer = (500, b"Internal Server Error")
+
+    with (
+        patch("robothor.engine.runtime.effect_results.record", return_value=True) as record,
+        patch("robothor.engine.runtime.effects.finish", return_value=True) as finish,
+    ):
+        _call("org_tool_write", _write())
+
+    record.assert_not_called()
+    assert finish.call_args.kwargs["uncertain"] is True
+
+
+def test_a_500_on_a_read_is_a_plain_error(env):
+    env.bridge.answer = (500, b"Internal Server Error")
+
+    result = _call("org_tool_read", _read())
+
+    assert result["error"]
+    assert "outcome_unknown" not in result
