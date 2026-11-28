@@ -112,8 +112,10 @@ def test_deep_reasoning_cannot_read_the_snapshot():
     from robothor.engine import rlm_tool
 
     with patch("robothor.memory.blocks.read_block", return_value={"content": "{}"}) as read:
-        out = rlm_tool._make_memory_block_read_fn()(SNAPSHOT_BLOCK)
-        preload = rlm_tool._load_context_source({"type": "block", "block_name": SNAPSHOT_BLOCK}, "")
+        out = rlm_tool._make_memory_block_read_fn(tenant_id="test-tenant")(SNAPSHOT_BLOCK)
+        preload = rlm_tool._load_context_source(
+            {"type": "block", "block_name": SNAPSHOT_BLOCK}, "", tenant_id="test-tenant"
+        )
 
     read.assert_not_called()
     assert "error" in out

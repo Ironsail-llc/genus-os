@@ -124,7 +124,7 @@ boundary. Keep them limited to these classes:
 |---|---|
 | `database` | `ROBOTHOR_DB_HOST`, `ROBOTHOR_DB_PORT`, `ROBOTHOR_DB_NAME`, `ROBOTHOR_DB_USER`, `ROBOTHOR_DB_PASSWORD`; Python services and migrations |
 | `cache` | `ROBOTHOR_REDIS_HOST`, `ROBOTHOR_REDIS_PORT`, `ROBOTHOR_REDIS_PASSWORD`; Python services through `secretRefs`. The dashboard reads the cache password key only, for the event-bus stream reads: the chart wires that one key as a `secretKeyRef` (with `ROBOTHOR_REDIS_HOST`/`PORT` when the in-chart cache is enabled), and `dashboard.secretRefs` still refuses `cache` |
-| `auth-signing` | `GENUS_AUTH_SIGNING_KEY`; Engine and Bridge enforce signed identity. It is currently also mounted to Orchestrator, which must remain network-restricted until it independently verifies tokens. |
+| `auth-signing` | `GENUS_AUTH_SIGNING_KEY`; Engine and Bridge enforce signed identity. It is also mounted to Orchestrator, which verifies the same tokens on its memory endpoints (`/ingest`, `/stats`, `/query`, `/v1/chat/completions`). |
 | `bridge-sso` | `GENUS_BRIDGE_SSO_SECRET`; Bridge and dashboard BFF only |
 | `bridge-oidc` | `GENUS_OIDC_ISSUERS`; Bridge only |
 | `dashboard-auth` | `AUTH_SECRET`, OIDC issuer/client ID/client secret/name, optional `CF_ACCESS_TEAM_DOMAIN`/`CF_ACCESS_AUD` (sign in via a fronting Cloudflare Access policy instead of a second IdP prompt); dashboard only. `AUTH_URL` is **not** a secret — it is the public origin and belongs in `dashboard.env`, set to `https://<dashboard.ingress.host>`; unset, sign-in redirects fall back to the container's `HOSTNAME=0.0.0.0` bind address. |
@@ -173,9 +173,13 @@ Private ingress is not the application authentication mechanism:
 - Engine independently verifies signed, same-tenant `engine:*` authority for
   every non-probe HTTP request and the IDE WebSocket. Webhook routes retain
   their provider-specific HMAC check.
-- Orchestrator does not yet independently verify this signed identity contract.
-  Keep it ClusterIP-only and NetworkPolicy-restricted; do not add direct
-  ingress until that gap is closed.
+- Orchestrator verifies the same signed tokens on its memory endpoints
+  (`/ingest`, `/stats`, `/query`, `/v1/chat/completions`): audience, expiry,
+  scope (`bridge:read` to read, `bridge:write` to ingest) and session standing,
+  and it binds each request to the token's tenant. A tokenless request is
+  served only on a single-tenant deployment. Its other routes (`/vision/*`,
+  `/profiles`, `/v1/models`, probes) still verify nothing, so keep it
+  ClusterIP-only and NetworkPolicy-restricted and do not add direct ingress.
 
 The Next.js dashboard has no model-provider credentials, URL, model selection,
 or provider headers. It forwards the verified Bridge bearer token to the
@@ -299,7 +303,7 @@ renders it on the bridge, the root engine and every cell. A component's own
 
 | Value | Renders | Default |
 |-------|---------|---------|
-| `tenancy.switchMode` | `GENUS_TENANT_SWITCH_MODE`: `off`, `observe` or `enforce` | `""`, which renders nothing; the code's default is `off` |
+| `tenancy.switchMode` | `GENUS_TENANT_SWITCH_MODE` on the bridge, every engine and the orchestrator: `off`, `observe` or `enforce` | `""`, which renders nothing; the code's default is `off` |
 | `tenancy.allowInertRls` | `GENUS_TENANT_SWITCH_ALLOW_INERT_RLS` | unset, which renders nothing; the code's default is `false` |
 
 Both render nothing until set, so a release that sets neither renders exactly

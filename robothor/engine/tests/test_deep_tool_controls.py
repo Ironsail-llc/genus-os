@@ -39,7 +39,7 @@ def test_deep_callbacks_keep_owner_and_deny_later_dispatch(runtime_db, monkeypat
         monkeypatch.setattr(rlm_tool, factory, lambda *args, **kwargs: underlying)
 
     def worker(**kwargs):
-        captured.update(rlm_tool._build_custom_tools("/synthetic"))
+        captured.update(rlm_tool._build_custom_tools("/synthetic", tenant_id=run.tenant_id))
         return {"response": "Prepared"}
 
     token = owner.set("owner")

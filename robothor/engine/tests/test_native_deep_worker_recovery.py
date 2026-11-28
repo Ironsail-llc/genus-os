@@ -41,7 +41,9 @@ async def test_native_deep_stop_retains_pending_and_late_evidence(engine_config)
         from robothor.engine.rlm_tool import _build_custom_tools
         from robothor.engine.runtime.provider_budget import DurableStopError
 
-        execute = _build_custom_tools(str(engine_config.workspace))["exec_shell"]["tool"]
+        execute = _build_custom_tools(str(engine_config.workspace), tenant_id="test-tenant")[
+            "exec_shell"
+        ]["tool"]
         entered.set()
         assert release.wait(10)
         denied = False
@@ -132,7 +134,9 @@ async def test_approved_deep_chat_stop_reconciles_late_worker_result(engine_conf
         from robothor.engine.rlm_tool import _build_custom_tools
         from robothor.engine.runtime.provider_budget import DurableStopError
 
-        execute = _build_custom_tools(str(engine_config.workspace))["exec_shell"]["tool"]
+        execute = _build_custom_tools(str(engine_config.workspace), tenant_id="test-tenant")[
+            "exec_shell"
+        ]["tool"]
         entered.set()
         assert release.wait(15), "Test must release the worker"
         with pytest.raises(DurableStopError):

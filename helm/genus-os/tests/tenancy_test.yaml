@@ -68,8 +68,33 @@ tests:
           path: spec.template.spec.containers[0].env
           content: {name: GENUS_TENANT_SWITCH_MODE, value: enforce}
 
-  - it: the orchestrator and dashboard never get it
+  # The orchestrator verifies the same acting tokens on its memory endpoints
+  # (robothor.auth.session_standing.refusal), so it must agree with the bridge:
+  # without the value it reads `off` and refuses every switched-in session.
+  - it: the orchestrator reads tenancy.switchMode too
     template: orchestrator/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.switchMode: enforce
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_MODE, value: enforce}
+
+  - it: the orchestrator does not get the inert-RLS override
+    template: orchestrator/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.switchMode: enforce
+      tenancy.allowInertRls: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_TENANT_SWITCH_ALLOW_INERT_RLS}
+          any: true
+
+  - it: the dashboard never gets it
+    template: dashboard/deployment.yaml
     documentIndex: 0
     set:
       tenancy.switchMode: enforce

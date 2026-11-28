@@ -458,17 +458,13 @@ async def _session_refusal(auth: AuthContext) -> tuple[int, str] | None:
     * the account moved tenant or was disabled — a HUMAN token is honoured
       only while its account still lives in ``home_tid`` and is active (401;
       ``robothor.auth.session_standing``, cached ~30 s per user).
+
+    The rule itself is :func:`robothor.auth.session_standing.refusal`, shared
+    with the orchestrator so the two surfaces cannot disagree.
     """
     from robothor.auth import session_standing
-    from robothor.auth.runtime import tenant_switch_mode
 
-    if auth.is_acting and tenant_switch_mode() != "enforce":
-        return 403, "tenant switching disabled"
-    if not auth.is_service and not await asyncio.to_thread(
-        session_standing.stands, auth.user_id, auth.home_tenant_id
-    ):
-        return 401, "session no longer valid"
-    return None
+    return await asyncio.to_thread(session_standing.refusal, auth)
 
 
 def _auth_enforced() -> bool:

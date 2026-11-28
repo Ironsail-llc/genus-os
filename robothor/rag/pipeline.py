@@ -30,6 +30,8 @@ async def run_pipeline(
     query: str,
     profile: str | None = None,
     messages: list[dict[str, Any]] | None = None,
+    *,
+    tenant_id: str = "",
 ) -> dict[str, Any]:
     """Run the full RAG pipeline.
 
@@ -45,6 +47,9 @@ async def run_pipeline(
         query: The user's question.
         profile: Optional profile override ('fast', 'general', 'research', 'code', etc.).
         messages: Optional chat history for multi-turn.
+        tenant_id: Tenant whose memory is searched. Empty falls through to the
+            memory layer's default; HTTP callers resolve it first
+            (``robothor.api.orchestrator.acting_tenant``).
 
     Returns:
         Dict with 'answer', 'profile', 'sources', 'timing'.
@@ -66,6 +71,7 @@ async def run_pipeline(
             search_all_memory,
             query,
             limit=p["memory_limit"],
+            tenant_id=tenant_id,
         )
     )
 

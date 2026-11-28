@@ -2248,6 +2248,50 @@ agent's own allow-set is the authoritative answer. The families:
 | Desktop | `desktop_*` (a real screen) |
 | n8n automations | `n8n_list_workflows`, `n8n_recent_failures` (the n8n monitor's snapshot — see above) |
 
+### Whose memory: every entry point acts as the caller's tenant
+
+Memory is read and written as the tenant of whoever is asking, on every way in:
+
+| Entry point | Where the tenant comes from |
+|---|---|
+| Engine memory tools | The run's tenant |
+| `deep_reason` (its `search_memory`, `get_entity` and `memory_block_read`, and memory, block and entity `context_sources`) | The run's tenant |
+| The `robothor-memory` MCP server (`genus mcp`) | The tenant the server process runs as: `ROBOTHOR_TENANT_ID`, then `ROBOTHOR_DEFAULT_TENANT`. A `tenant_id` argument can repeat that tenant but not change it |
+| The orchestrator's `/ingest`, `/stats`, `/query` and `/v1/chat/completions` | Only a verified bearer token's tenant. The dashboard forwards its session token, and services send a minted service token. An invalid token gets a 401, and an `X-Tenant-Id` that disagrees with the token gets a 403 |
+| The vision service's camera events | Sent to `/ingest` with a service token for the tenant its process runs as. A process with no signing key provisioned, or bound to no tenant, sends no token |
+
+A call that names no tenant gets the default tenant only on a deployment with
+at most one active tenant, so a single-tenant install behaves exactly as it did
+before. On a deployment with more than one, the call is refused and nothing is
+read or written: `deep_reason` and the MCP tools return an `error` that names the
+entry point, and the orchestrator answers 400.
+
+On the orchestrator, `X-Tenant-Id` on its own never chooses a tenant. A request
+with no token may send it only to name the tenant the rule above already gives
+it. A request that names any other tenant this way gets a 401, because acting as
+a named tenant takes a token.
+
+The orchestrator applies the bridge's checks to a token:
+
+- Reading (`/stats`, `/query`, `/v1/chat/completions`) needs `bridge:read`, and
+  `/ingest` needs `bridge:write`. A token without the scope gets a 403, so a
+  viewer can query memory but cannot write to it.
+- A token whose session no longer stands is refused. That covers an account
+  that has been moved or disabled (401), and an acting token once tenant
+  switching is turned off (403).
+- Each request's database connections are bound to the token's tenant, so
+  row-level security lets it see and write only that tenant's rows.
+
+An OpenAI-compatible client (Open WebUI, LiteLLM, the `openai` SDK) always sends
+its API key as a bearer. A key that is not a JWT, such as a placeholder, counts
+as no token. On a single-tenant install such a client works as it did before. On
+a deployment with more than one tenant, give the client a token for its tenant
+as its API key.
+
+Some callers send no token, so on a deployment with more than one tenant the
+orchestrator now refuses them. `scripts/thermal-shed.sh` is one of them: its
+best-effort thermal events no longer reach memory on such a deployment.
+
 ### Workspace periods: `room_request_period`
 
 `room_request_period(room_id, grain, anchor)` gets a report workspace's edition for

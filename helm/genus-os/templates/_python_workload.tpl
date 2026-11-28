@@ -113,13 +113,24 @@ Renders:
        root engine (and the dashboard) about which tenant that is. */ -}}
 {{- $_ := set $serviceEnv "ROBOTHOR_DEFAULT_TENANT" (include "genus-os.rootTenant" $root) -}}
 {{- end -}}
-{{- /* Tenant switching: the bridge issues the acting token and every engine
-       enforces it, so one value reaches all of them. Rendered only when set,
-       so an unset key leaves the code's own default (`off`) in charge. */ -}}
+{{- /* Tenant switching: the bridge issues the acting token, and every engine
+       and the orchestrator (on its memory endpoints) honour it, so one value
+       reaches all of them. Rendered only when set, so an unset key leaves the
+       code's own default (`off`) in charge. */ -}}
+{{- $switchModes := list "off" "observe" "enforce" -}}
+{{- if eq $component "orchestrator" -}}
+{{- /* Validated (and refused) where the engine and bridge render it, below:
+       one failure message, from one place. */ -}}
+{{- with ($root.Values.tenancy | default dict).switchMode -}}
+{{- if has (toString .) $switchModes -}}
+{{- $_ := set $serviceEnv "GENUS_TENANT_SWITCH_MODE" (toString .) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if has $component (list "engine" "bridge") -}}
 {{- $tenancy := $root.Values.tenancy | default dict -}}
 {{- with $tenancy.switchMode -}}
-{{- if not (has (toString .) (list "off" "observe" "enforce")) -}}
+{{- if not (has (toString .) $switchModes) -}}
 {{- fail (printf "tenancy.switchMode must be one of off, observe, enforce, got %q" (toString .)) -}}
 {{- end -}}
 {{- $_ := set $serviceEnv "GENUS_TENANT_SWITCH_MODE" (toString .) -}}

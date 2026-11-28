@@ -14,7 +14,7 @@ HANDLERS: dict[str, Any] = {}
 async def _deep_reason(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.rlm_tool import DeepReasonConfig, execute_deep_reason
 
-    config = DeepReasonConfig(workspace=ctx.workspace)
+    config = DeepReasonConfig(workspace=ctx.workspace, tenant_id=ctx.tenant_id)
     return await asyncio.to_thread(
         execute_deep_reason,
         query=args.get("query", ""),

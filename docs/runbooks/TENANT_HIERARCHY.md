@@ -105,7 +105,7 @@ set on each:
 | The child's engine | `GENUS_EVENT_CONSUMER_GROUP` | `engine-<child id>`, so engines do not share one event-consumer group |
 | The child's engine | `ROBOTHOR_WORKSPACE` | a directory of its own, never the root's. The engine keeps its plugin lockfile there, and a child admin enables and disables plugins in it; on a shared workspace that would reach the root and every sibling. (`ROBOTHOR_PLUGIN_LOCKFILE` alone also separates the lockfile.) |
 | The bridge | `GENUS_TENANT_ENGINE_URLS` | a JSON object mapping each child id to its engine's URL, e.g. `{"acme-child-a": "http://127.0.0.1:18811"}` |
-| The bridge AND every engine | `GENUS_TENANT_SWITCH_MODE` | the same value everywhere (`off`, `observe` or `enforce`) |
+| The bridge, every engine AND the orchestrator | `GENUS_TENANT_SWITCH_MODE` | the same value everywhere (`off`, `observe` or `enforce`). The orchestrator refuses an acting token unless its own value is `enforce`, so a switched-in admin's memory reads would otherwise come back empty |
 
 Every process also needs the shared vault key below.
 
