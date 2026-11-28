@@ -221,3 +221,155 @@ def test_record_baseline_with_extraction_writes_the_baseline_file(
         )
     )
     assert rc == 0 and written["path"] == str(target)
+
+
+# ═══ --baseline and --record-baseline end to end, only the models stubbed ═
+
+_SET = """
+version: 1
+conversations:
+  - id: pref-a
+    category: preference
+    at: "2026-03-04T09:00:00+00:00"
+    turns:
+      - {role: user, text: "I really prefer dark roast coffee."}
+    facts:
+      - fact: "The user prefers dark roast coffee."
+        keys: ["dark roast"]
+        speaker: user
+        trust: user_stated
+        turns: [1]
+        date: null
+        paraphrase: "The user likes dark roast coffee best."
+        decoy: "The user dislikes dark roast coffee."
+"""
+
+
+@pytest.fixture
+def models(monkeypatch):
+    """The extraction and the judge, stubbed; everything else is real."""
+    from robothor.llm import ollama
+    from robothor.memory import eval_extraction as ex
+    from robothor.memory import generation
+    from robothor.memory.facts import Extraction
+
+    state = {
+        "facts": [
+            {
+                "fact_text": "The user prefers dark roast coffee.",
+                "speaker_role": "user",
+                "turn_refs": [1],
+                "event_time": None,
+            }
+        ]
+    }
+
+    async def extract(window, **_kw):
+        return Extraction(list(state["facts"]))
+
+    async def chat(messages, **_kw):
+        return "OK"
+
+    async def judge(case, ans, **_kw):
+        gold, got = set(case.gold[0].lower().split()), set(ans.text.lower().split())
+        return ("dislikes" not in got) and len(gold & got) >= 3, "stub"
+
+    monkeypatch.setattr(generation, "_remote_enabled", lambda: False)
+    monkeypatch.setattr(ex, "extract_conversation_facts", extract)
+    monkeypatch.setattr(ollama, "chat", chat)
+    monkeypatch.setattr(ex, "llm_judge", judge)
+    return state
+
+
+def _run(tmp_path, *extra: str) -> int:
+    fixtures = tmp_path / "set.yaml"
+    fixtures.write_text(_SET, encoding="utf-8")
+    return cli.cmd_memory_eval(
+        _parse(
+            "--extraction",
+            "--fixtures",
+            str(fixtures),
+            "--extraction-model",
+            "m",
+            "--judge-model",
+            "j",
+            "--repeats",
+            "2",
+            *extra,
+        )
+    )
+
+
+def test_record_then_compare_end_to_end(models, tmp_path, capsys) -> None:
+    base = tmp_path / "baseline.yaml"
+    assert _run(tmp_path, "--baseline", str(base), "--record-baseline") == 0
+    assert base.exists()
+    assert _run(tmp_path, "--baseline", str(base), "--report", str(tmp_path / "r.json")) == 0
+    assert "no regression" in (tmp_path / "r.md").read_text()
+
+
+def test_a_regression_end_to_end_exits_two(models, tmp_path) -> None:
+    base = tmp_path / "baseline.yaml"
+    assert _run(tmp_path, "--baseline", str(base), "--record-baseline") == 0
+    models["facts"] = []
+    assert _run(tmp_path, "--baseline", str(base)) == 2
+
+
+def test_a_baseline_that_cannot_be_compared_keeps_the_report_and_exits_three(
+    models, tmp_path, capsys
+) -> None:
+    base = tmp_path / "baseline.yaml"
+    base.write_text("version: 1\nmodel: m\n", encoding="utf-8")
+    report = tmp_path / "r.json"
+    assert _run(tmp_path, "--baseline", str(base), "--report", str(report)) == 3
+    assert json.loads(report.read_text())["model"] == "m"
+    assert "cannot compare" in capsys.readouterr().out
+
+
+def test_a_baseline_that_cannot_be_written_keeps_the_report_and_exits_three(
+    models, tmp_path, capsys
+) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    report = tmp_path / "r.json"
+    rc = _run(
+        tmp_path,
+        "--baseline",
+        str(blocker / "baseline.yaml"),
+        "--record-baseline",
+        "--report",
+        str(report),
+    )
+    assert rc == 3
+    assert json.loads(report.read_text())["model"] == "m"
+    assert "cannot record" in capsys.readouterr().out
+
+
+def test_record_baseline_from_saved_reports_needs_no_model(models, tmp_path, monkeypatch) -> None:
+    from robothor.memory import eval_extraction as ex
+
+    saved = tmp_path / "saved.json"
+    assert _run(tmp_path, "--report", str(saved)) == 0
+
+    async def no_run(*_a, **_k):
+        raise AssertionError("recording from saved reports must not run the model")
+
+    monkeypatch.setattr(cli, "run_extraction_eval", no_run)
+    base = tmp_path / "baseline.yaml"
+    rc = cli.cmd_memory_eval(
+        _parse(
+            "--extraction",
+            "--fixtures",
+            str(tmp_path / "set.yaml"),
+            "--record-baseline",
+            "--baseline",
+            str(base),
+            "--from-report",
+            str(saved),
+            "--from-report",
+            str(saved),
+        )
+    )
+    assert rc == 0
+    loaded = ex.load_baseline(base)
+    assert loaded["runs"] == 4 and loaded["model"] == "m"

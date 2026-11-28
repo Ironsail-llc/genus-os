@@ -943,3 +943,88 @@ def test_a_baseline_without_its_parts_is_refused(tmp_path: Path) -> None:
     path.write_text("version: 1\nmodel: m\n", encoding="utf-8")
     with pytest.raises(ValueError, match="b.yaml"):
         ex.load_baseline(path)
+
+
+# ═══ a real run's report records, loads and compares as a baseline ══════
+
+
+@pytest.mark.asyncio
+async def test_a_real_run_records_loads_and_compares_as_a_baseline(
+    small_path: Path, tmp_path: Path
+) -> None:
+    extract = _stub_extract({"dark roast": [_x("The user prefers dark roast coffee.")]})
+    report = await ex.run_extraction_eval(
+        small_path, model="m", llm=_keyword_llm, extract=extract, repeats=2
+    )
+    assert report["split"] == "dev"
+    target = tmp_path / "baseline.yaml"
+    ex.write_baseline(target, report)
+    base = ex.load_baseline(target)
+    assert base["model"] == "m" and base["split"] == "dev" and base["runs"] == 2
+    again = await ex.run_extraction_eval(
+        small_path, model="m", llm=_keyword_llm, extract=extract, repeats=2
+    )
+    out = ex.compare_to_baseline(again, base)
+    assert out["regressed"] is False and out["rows"]
+
+
+@pytest.mark.asyncio
+async def test_a_worse_real_run_regresses_against_a_recorded_one(
+    small_path: Path, tmp_path: Path
+) -> None:
+    good = _stub_extract({"dark roast": [_x("The user prefers dark roast coffee.")]})
+    target = tmp_path / "baseline.yaml"
+    ex.write_baseline(
+        target,
+        await ex.run_extraction_eval(
+            small_path, model="m", llm=_keyword_llm, extract=good, repeats=2
+        ),
+    )
+    worse = await ex.run_extraction_eval(
+        small_path, model="m", llm=_keyword_llm, extract=_stub_extract({}), repeats=2
+    )
+    out = ex.compare_to_baseline(worse, ex.load_baseline(target))
+    assert out["regressed"] is True
+    assert any(r["metric"] == "recall" and r["regressed"] for r in out["rows"])
+
+
+def _saved(tmp_path: Path, name: str, report: dict[str, Any]) -> Path:
+    import json
+
+    path = tmp_path / name
+    path.write_text(json.dumps(report, default=str), encoding="utf-8")
+    return path
+
+
+@pytest.mark.asyncio
+async def test_a_baseline_can_be_recorded_from_saved_run_reports(
+    small_path: Path, tmp_path: Path
+) -> None:
+    one = _stub_extract({"dark roast": [_x("The user prefers dark roast coffee.")]})
+    none = _stub_extract({})
+    a = await ex.run_extraction_eval(small_path, model="m", llm=_keyword_llm, extract=one)
+    b = await ex.run_extraction_eval(
+        small_path, model="m", llm=_keyword_llm, extract=none, repeats=2
+    )
+    report = ex.report_from_saved(
+        [_saved(tmp_path, "a.json", a), _saved(tmp_path, "b.json", b)], small_path
+    )
+    assert report["repeats"] == 3 and len(report["per_repeat"]) == 3
+    assert report["model"] == "m" and report["split"] == "dev"
+    assert [r["recall"] for r in report["per_repeat"]] == [0.5, 0.0, 0.0]
+    assert report["comparable"]["recall"] == pytest.approx(1 / 6)
+    base = ex.baseline_from_report(report, thresholds={"status": "PROPOSED"})
+    assert base["tolerance"]["recall"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_saved_reports_from_different_models_are_not_pooled(
+    small_path: Path, tmp_path: Path
+) -> None:
+    extract = _stub_extract({})
+    a = await ex.run_extraction_eval(small_path, model="m", llm=_keyword_llm, extract=extract)
+    b = await ex.run_extraction_eval(small_path, model="n", llm=_keyword_llm, extract=extract)
+    with pytest.raises(ValueError, match="model"):
+        ex.report_from_saved(
+            [_saved(tmp_path, "a.json", a), _saved(tmp_path, "b.json", b)], small_path
+        )
