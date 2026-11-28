@@ -33,6 +33,7 @@ Arguments are audited as a digest, never as values.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -48,6 +49,7 @@ from robothor.tenancy.remote_contract import (
     ERR_BAD_ARGUMENTS,
     ERR_NOT_PERMITTED,
     ERR_TIMEOUT,
+    ERR_UNAVAILABLE,
     ERR_WRITE_FORBIDDEN,
     SCOPE_ORG_REMOTE,
     args_digest,
@@ -57,6 +59,8 @@ from robothor.tenancy.remote_contract import (
 from routers import _engine_client
 from routers._audit import audited
 from routers.org import _require_home_operator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/org", tags=["org"])
 
@@ -206,6 +210,11 @@ async def remote_call(request: Request) -> JSONResponse:
     except _RefusedError as refused:
         _audit_call(request, target, call, body, status="denied", reason=refused.code)
         return refused.response()
+    except Exception:  # noqa: BLE001 - a failed check refuses; nothing is forwarded
+        logger.warning("remote call could not be checked", exc_info=True)
+        unavailable = _unavailable()
+        _audit_call(request, target, call, body, status="denied", reason=unavailable.code)
+        return unavailable.response()
 
     forwarded = {
         **call,
@@ -213,9 +222,16 @@ async def remote_call(request: Request) -> JSONResponse:
         "agent_id": auth.agent_id or auth.user_id,
         "attestations": _attestations(),
     }
-    status, answer = await _engine_client.engine_request(
-        "POST", _CALL_PATH, json=forwarded, timeout=BRIDGE_TIMEOUT_S, tenant=target
-    )
+    try:
+        status, answer = await _engine_client.engine_request(
+            "POST", _CALL_PATH, json=forwarded, timeout=BRIDGE_TIMEOUT_S, tenant=target
+        )
+    except ValueError:
+        # No engine address for that tenant: raised before anything is sent.
+        logger.warning("remote call: no engine address for the target", exc_info=True)
+        unavailable = _unavailable()
+        _audit_call(request, target, forwarded, body, status="denied", reason=unavailable.code)
+        return unavailable.response()
     outcome = answer.get("outcome") if isinstance(answer, dict) else None
     _audit_call(
         request,
@@ -228,6 +244,12 @@ async def remote_call(request: Request) -> JSONResponse:
         outcome=outcome,
     )
     return JSONResponse(status_code=status, content=answer)
+
+
+def _unavailable() -> _RefusedError:
+    return _RefusedError(
+        503, ERR_UNAVAILABLE, "The call could not be checked or routed; nothing was sent."
+    )
 
 
 def _call_status(access: str, status: int, answer: Any) -> str:
