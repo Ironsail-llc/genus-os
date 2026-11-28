@@ -460,10 +460,11 @@ PLUGIN = {
 
 The rules are `read_only`'s: a plugin offers only tools it provides. A
 foreign tool, an unknown key, a bad `access`, a `read` outside `read_only`, a
-malformed token or notes over the limit refuse the whole plugin, and the
-reason names the tool.
+malformed token, notes over the limit, or any value of the wrong type refuse
+the whole plugin (never the other plugins), and the reason names the tool.
 
-The manifest may mirror the declaration (a dict, never a list):
+The manifest must mirror the declaration (a dict, never a list), because the
+pre-install scan reads only the manifest:
 
 ```yaml
 # acme_tools/genus-plugin.yaml
@@ -473,11 +474,11 @@ remote_tools:
   write: [acme_update]
 ```
 
-When the manifest has `remote_tools`, the loader refuses a payload whose read
-and write sets differ from it, and the scan reports it (`remote_tools` in the
-scan result) and blocks a malformed one: a key other than `read` and `write`,
-a tool named for both, or a tool the manifest does not declare as its own.
-Without it, the payload alone decides.
+The loader refuses a payload that declares `remote` without this mirror, and a
+payload whose read and write sets differ from it. The scan reports it
+(`remote_tools` in the scan result) and blocks a malformed one: a key other
+than `read` and `write`, a tool named for both, or a tool the manifest does not
+declare as its own.
 
 What the child tenant's engine checks before the tool runs, in order: that
 the tool is declared and for that access, who is asking (an owner or admin of the parent, and an owner

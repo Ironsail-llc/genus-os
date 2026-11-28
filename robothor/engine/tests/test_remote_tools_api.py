@@ -56,7 +56,20 @@ class _Dist:
     files = ()
 
     def read_text(self, filename: str) -> str | None:
-        return None
+        # A payload that declares `remote` must carry the manifest mirror.
+        return _MANIFEST if filename == "genus-plugin.yaml" else None
+
+
+_MANIFEST = (
+    "name: acme-tools\n"
+    "contract_version: 1\n"
+    "handlers: [acme_lookup, acme_update, acme_big, acme_export, acme_risky, acme_slow,"
+    " acme_fails, acme_plain]\n"
+    "schemas: [acme_lookup, acme_update]\n"
+    "remote_tools:\n"
+    "  read: [acme_lookup, acme_big, acme_slow, acme_fails]\n"
+    "  write: [acme_update, acme_export, acme_risky]\n"
+)
 
 
 class _EP:

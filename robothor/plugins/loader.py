@@ -614,9 +614,21 @@ def load_plugins(
 
         declared_remote: dict[str, dict[str, Any]] = {}
         if group == "genus.tools" and "remote" in payload:
-            remote = _remote_specs(
-                payload.get("remote"), set(contributions), declared_ro, distribution or name
-            )
+            try:
+                remote = _remote_specs(
+                    payload.get("remote"), set(contributions), declared_ro, distribution or name
+                )
+            except Exception as exc:  # noqa: BLE001 - one plugin's shape never stops the load
+                remote = f"remote declaration could not be read ({type(exc).__name__}) — refused"
+            if isinstance(remote, str) or not remote:
+                pass
+            elif manifest is None or manifest.remote_tools is None:
+                # The pre-install scan reads only the manifest: a wheel whose
+                # payload exposes tools must show them there.
+                remote = (
+                    "remote is declared in the payload but the manifest has no "
+                    "remote_tools mirror — refused"
+                )
             if isinstance(remote, str):
                 result.failures.append(PluginFailure(name, group, remote, distribution))
                 logger.warning("Plugin %r remote declaration refused: %s", name, remote)
@@ -702,15 +714,21 @@ def _remote_specs(
 
     if not isinstance(raw, dict):
         return "remote must map tool names to declarations — refused"
+    if not all(isinstance(tool, str) for tool in raw):
+        return "remote must be keyed by tool names — refused"
     foreign = sorted(str(tool) for tool in set(raw) - provided)
     if foreign:
         return f"remote names {foreign} are not provided by this plugin — refused"
     specs: dict[str, dict[str, Any]] = {}
     for tool, declaration in raw.items():
-        if not isinstance(declaration, dict) or set(declaration) - _REMOTE_KEYS:
+        if (
+            not isinstance(declaration, dict)
+            or not all(isinstance(key, str) for key in declaration)
+            or set(declaration) - _REMOTE_KEYS
+        ):
             return f"remote[{tool!r}] takes only {sorted(_REMOTE_KEYS)} — refused"
         access = declaration.get("access")
-        if access not in ACCESS_VALUES:
+        if not isinstance(access, str) or access not in ACCESS_VALUES:
             return f"remote[{tool!r}].access must be one of {sorted(ACCESS_VALUES)} — refused"
         if access == ACCESS_READ and tool not in read_only:
             return f"remote[{tool!r}] is offered for read but is not in read_only — refused"
