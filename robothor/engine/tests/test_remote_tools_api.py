@@ -983,36 +983,39 @@ def test_check_details_keep_only_a_urls_scheme_host_and_port() -> None:
         "kept at /srv/acme/conf.yaml"
     )
 
-    assert "https://api.example:8443" in text
-    assert "pa55word" not in text and "svc-user" not in text
-    assert "abc123" not in text and "key=" not in text and "frag" not in text
-    assert "/v1/token" not in text
-    assert "/srv/acme" not in text and "<path>" in text
-    assert "http:/<path>" not in text
+    assert text == "token from https://api.example:8443 kept at <path>"
 
 
 @pytest.mark.parametrize(
-    ("url", "secret"),
+    ("url", "origin", "secret"),
     [
         # A chat webhook: the last path segment is the credential.
         (
             "https://hooks.chat.example/services/T0000/B0000/webhooksecretvalue",
+            "https://hooks.chat.example",
             "webhooksecretvalue",
         ),
         # An id and a token in the path.
-        ("https://chat.example/api/webhooks/1234567/webhooktokenvalue", "webhooktokenvalue"),
+        (
+            "https://chat.example/api/webhooks/1234567/webhooktokenvalue",
+            "https://chat.example",
+            "webhooktokenvalue",
+        ),
         # A bot API: the token rides in the first segment.
-        ("https://api.bot.example/bot1234567:bottokenvalue/getMe", "bottokenvalue"),
+        (
+            "https://api.bot.example/bot1234567:bottokenvalue/getMe",
+            "https://api.bot.example",
+            "bottokenvalue",
+        ),
     ],
 )
-def test_check_details_never_keep_a_credential_carried_in_a_urls_path(url, secret) -> None:
+def test_check_details_never_keep_a_credential_carried_in_a_urls_path(url, origin, secret) -> None:
     from robothor.engine.remote_tools import _clean
 
     text = _clean(f"could not post to {url}: 404")
 
+    assert text == f"could not post to {origin}: 404"
     assert secret not in text
-    assert "1234567" not in text
-    assert text.startswith("could not post to https://") and text.endswith(": 404")
 
 
 def test_check_details_scrub_a_windows_path() -> None:
@@ -1145,3 +1148,87 @@ async def test_a_declared_tool_routed_to_an_adapter_is_unknown(world, monkeypatc
     listed = (await _request("GET", "/api/admin/remote-tools")).json()
     assert "acme_lookup" not in {tool["name"] for tool in listed["tools"]}
     assert world.handlers.calls == []
+
+
+# ── a result whose keys are not plain JSON keep their signals ───────────────
+
+
+async def test_a_write_result_with_a_uuid_key_and_outcome_unknown_stays_unknown(world) -> None:
+    import uuid
+
+    world.handlers.risky_result = {
+        "error": "dropped",
+        "outcome_unknown": True,
+        uuid.UUID("12345678-1234-5678-1234-567812345678"): "row",
+    }
+
+    answer = await _call(**_risky())
+
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["outcome_unknown"] is True
+    assert answer.json()["result"]["12345678-1234-5678-1234-567812345678"] == "row"
+    assert world.ledger.rows[(CHILD, "req-1")]["state"] == "running"
+
+
+async def test_a_write_result_with_a_tuple_key_and_an_error_stays_an_error(world) -> None:
+    world.handlers.risky_result = {"error": "slot already taken", ("a", 1): "x"}
+
+    answer = await _call(**_risky())
+
+    assert answer.json()["outcome"] == rc.OUTCOME_ERROR
+    assert answer.json()["result"]["error"] == "slot already taken"
+
+
+@pytest.mark.parametrize(
+    "signals",
+    [
+        {"error": "dropped", "outcome_unknown": True},
+        {"error": "RuntimeError: boom", "tool_crashed": True},
+    ],
+)
+async def test_a_circular_write_result_keeps_its_signals(world, signals) -> None:
+    result: dict[str, Any] = dict(signals)
+    result["self"] = result
+    world.handlers.risky_result = result
+
+    answer = await _call(**_risky())
+
+    payload = answer.json()
+    assert payload["outcome"] == rc.OUTCOME_ERROR
+    assert payload["outcome_unknown"] is True
+    assert payload["result"]["result_unencodable"] is True
+    assert world.ledger.rows[(CHILD, "req-1")]["state"] == "running"
+
+
+async def test_a_circular_refusal_is_still_released(world) -> None:
+    from robothor.engine.refusal import refusal
+
+    result = refusal("writes are stopped", gate="flag", name="ACME_KILL", unlock="x")
+    result["self"] = result
+    world.handlers.risky_result = result
+
+    answer = await _call(**_risky())
+
+    assert answer.json()["outcome"] == rc.OUTCOME_ERROR
+    assert (CHILD, "req-1") not in world.ledger.rows
+
+
+# ── a replay says what the first answer said ────────────────────────────────
+
+
+async def test_a_replayed_error_keeps_its_original_outcome(world) -> None:
+    world.handlers.risky_result = {"error": "slot already taken"}
+
+    first = await _call(**_risky())
+    again = await _call(**_risky())
+
+    assert first.json()["outcome"] == rc.OUTCOME_ERROR
+    assert again.json()["outcome"] == rc.OUTCOME_REPLAYED
+    assert again.json()["original_outcome"] == rc.OUTCOME_ERROR
+
+
+async def test_a_replayed_success_keeps_its_original_outcome(world) -> None:
+    await _call(**_risky())
+    again = await _call(**_risky())
+
+    assert again.json()["original_outcome"] == rc.OUTCOME_OK

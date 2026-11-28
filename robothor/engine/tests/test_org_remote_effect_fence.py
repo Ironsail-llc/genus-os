@@ -3,9 +3,12 @@
 
 QA saw one dropped ``org_tool_write`` hold every later remote write by that
 person: a dry run to another company and a call to an undeclared tool were
-both refused with "This write was NOT sent". The fence is now the call's
-target (child, tool, argument digest), a dry run is no write at all, and the
-refusal names the uncertain call by those three, never by its arguments.
+both refused with "This write was NOT sent". The fence is now the child and
+its tool: another company or another tool goes ahead and a dry run is no write
+at all, but any later write to the same tool in the same company waits,
+however it is worded, since a reworded retry carries a new request id the
+child would run again. The refusal names the uncertain call by child, tool
+and argument digest, never by its arguments.
 """
 
 from __future__ import annotations
@@ -51,7 +54,6 @@ def _begin(ctx: Any, args: dict[str, Any]) -> dict[str, Any]:
     [
         _args(tenant="acme-child-b"),  # another company
         _args(tool="example_other"),  # another tool, declared or not
-        _args(args={"name": "someone else"}),  # other arguments
     ],
 )
 def test_another_remote_write_is_not_fenced(effect_db, other) -> None:
@@ -86,3 +88,20 @@ def test_a_dry_run_is_not_journalled_at_all() -> None:
     ctx = type("Ctx", (), {"is_benchmark": False})()
     assert _bypass(TOOL, {**_args(), "dry_run": True}, ctx) is True
     assert _bypass(TOOL, _args(), ctx) is False
+
+
+@pytest.mark.parametrize(
+    "reworded",
+    [
+        _args(args={"name": "someone else"}),  # other arguments
+        _args(args={"name": SECRET, "note": ""}),  # an added blank optional field
+        _args(args={"name": SECRET, "count": "10"}),  # "10" for 10
+        _args(tenant="  acme-child-a "),  # the same company, spelled with spaces
+    ],
+)
+def test_a_reworded_retry_of_the_same_remote_write_is_held(effect_db, reworded) -> None:
+    ctx = context()
+    _uncertain(ctx, _args(args={"name": SECRET, "count": 10}))
+
+    with pytest.raises(effects.EffectPendingError):
+        _begin(ctx, reworded)
