@@ -113,6 +113,8 @@ class _Handlers:
         """A write whose answer each test sets: a value, or an exception to raise."""
         self.calls.append(("acme_risky", args, ctx))
         outcome = self.risky_result
+        if outcome == "hang":
+            await asyncio.sleep(5)
         if isinstance(outcome, BaseException):
             raise outcome
         return dict(outcome)
@@ -910,8 +912,10 @@ def _risky(**over: Any) -> dict[str, Any]:
     [
         # The tool says so itself, as the effect ledger reads it.
         {"error": "the connection dropped after the request was sent", "outcome_unknown": True},
-        # No signal: an error from a write may have changed the remote system.
-        {"error": "upstream answered 500"},
+        # A transport failure the engine marks (response_failure) for a write.
+        {"error": "backing service unreachable: ReadTimeout", "outcome_unknown": True},
+        # A crash the dispatcher caught.
+        {"error": "RuntimeError: boom", "tool_crashed": True},
         # The tool raised: the dispatcher reports a crash.
         ConnectionError("connection reset by peer"),
     ],
@@ -1063,3 +1067,32 @@ async def test_a_read_with_a_non_json_result_answers(world) -> None:
     assert answer.status_code == 200, answer.text
     assert answer.json()["outcome"] == rc.OUTCOME_OK
     assert answer.json()["result"]["record"]["amount"] == "12.50"
+
+
+async def test_a_plain_error_from_a_write_is_a_completed_call_stored_and_replayed(world) -> None:
+    world.handlers.risky_result = {"error": "slot already taken"}
+
+    first = await _call(**_risky())
+    again = await _call(**_risky())
+
+    assert first.status_code == 200, first.text
+    assert first.json()["outcome"] == rc.OUTCOME_ERROR
+    assert "outcome_unknown" not in first.json()
+    assert world.ledger.rows[(CHILD, "req-1")]["state"] == "done"
+    assert again.json()["outcome"] == rc.OUTCOME_REPLAYED
+    assert again.json()["result"] == {"error": "slot already taken"}
+    assert [c[0] for c in world.handlers.calls] == ["acme_risky"]
+    [row, _replay] = _audits(world)
+    assert row["details"]["outcome"] == rc.OUTCOME_ERROR
+
+
+async def test_a_write_that_runs_out_of_time_is_never_run_again(world, monkeypatch) -> None:
+    from robothor.engine import remote_tools
+
+    monkeypatch.setattr(remote_tools, "TIMEOUT_S", 0.05)
+    world.handlers.risky_result = "hang"
+
+    _refusal(await _call(**_risky()), 504, rc.ERR_TIMEOUT)
+    world.handlers.risky_result = {"done": True}
+    _refusal(await _call(**_risky()), 409, rc.ERR_OUTCOME_UNKNOWN)
+    assert [c[0] for c in world.handlers.calls] == ["acme_risky"]

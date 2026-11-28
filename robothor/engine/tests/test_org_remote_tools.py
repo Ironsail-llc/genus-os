@@ -868,3 +868,119 @@ def test_a_500_on_a_read_is_a_plain_error(env):
 
     assert result["error"]
     assert "outcome_unknown" not in result
+
+
+# ── The home fence covers one call, never the whole tool ─────────────────────
+
+
+def _write_args(**over: Any) -> dict[str, Any]:
+    return {"tenant": CHILD_A, "tool": "example_write", "args": {"id": 7, "note": "x"}, **over}
+
+
+def test_org_tool_write_fences_by_tenant_tool_and_argument_digest():
+    from robothor.engine.runtime import effect_tools
+    from robothor.tenancy.remote_contract import args_digest
+
+    target = effect_tools.target_of("org_tool_write", _write_args())
+
+    assert target == {
+        "tenant": CHILD_A,
+        "tool": "example_write",
+        "args_digest": args_digest({"id": 7, "note": "x"}),
+    }
+    assert effect_tools.fences_whole_tool("org_tool_write") is False
+    key = effect_tools.target_key("org_tool_write", target)
+    assert key is not None
+    for other in (
+        _write_args(tenant=CHILD_B),
+        _write_args(tool="example_other"),
+        _write_args(args={"id": 8, "note": "x"}),
+    ):
+        assert (
+            effect_tools.target_key(
+                "org_tool_write", effect_tools.target_of("org_tool_write", other)
+            )
+            != key
+        )
+
+
+def test_the_stored_target_holds_the_digest_never_the_arguments():
+    from robothor.engine.runtime import effect_tools
+
+    secret = "patient-name-Alice-Example"
+    stored = effect_tools.stored(
+        "org_tool_write",
+        effect_tools.target_of("org_tool_write", _write_args(args={"name": secret})),
+    )
+
+    assert secret not in repr(stored)
+    assert set(stored) == {"tenant", "tool", "args_digest"}
+
+
+def test_a_dry_run_write_bypasses_the_effect_ledger(env, ledger):
+    _call("org_tool_write", _write(dry_run=True))
+
+    assert ledger.reserved == []
+    assert env.bridge.body(env.bridge.calls[0])["dry_run"] is True
+
+
+def test_a_plain_error_from_the_child_tool_is_not_unknown(env):
+    env.bridge.answer = (
+        200,
+        {
+            "outcome": "error",
+            "request_id": "eff-1",
+            "tool": "example_write",
+            "result": {"error": "slot already taken"},
+            "would": None,
+        },
+    )
+
+    result = _call("org_tool_write", _write())
+
+    assert result["error"]
+    assert "outcome_unknown" not in result
+
+
+# ── The home audit never copies the child's own text ────────────────────────
+
+
+def test_a_tool_reported_error_is_audited_without_its_text(env):
+    env.bridge.answer = (
+        200,
+        {
+            "outcome": "error",
+            "request_id": "eff-1",
+            "tool": "example_write",
+            "result": {"error": "no slot for patient-name-Alice-Example"},
+            "would": None,
+        },
+    )
+
+    result = _call("org_tool_write", _write())
+
+    assert "patient-name-Alice-Example" in result["error"]  # the model still reads it
+    (row,) = _rows(env)
+    assert "patient-name-Alice-Example" not in row["reason"]
+    assert row["reason"]
+
+
+def test_an_unreadable_answer_is_audited_without_its_text(env):
+    env.bridge.answer = (500, {"error": "boom", "message": "patient-name-Alice-Example leaked"})
+
+    _call("org_tool_write", _write())
+
+    (row,) = _rows(env)
+    assert "patient-name-Alice-Example" not in row["reason"]
+
+
+def test_a_targets_own_refusal_sentence_is_kept_in_the_audit(env):
+    env.bridge.answer = (
+        403,
+        {"error": "remote_attestation_missing", "message": "Needs an agreement."},
+    )
+
+    _call("org_tool_write", _write())
+
+    (row,) = _rows(env)
+    assert "Needs an agreement." in row["reason"]
