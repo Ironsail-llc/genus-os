@@ -159,7 +159,15 @@ def _tenant_target(raw: Any) -> str | None:
     return target
 
 
-def audit_answered(name: str, args: dict[str, Any], ctx: ToolContext, outcome: str) -> None:
+def audit_answered(
+    name: str,
+    args: dict[str, Any],
+    ctx: ToolContext,
+    outcome: str,
+    *,
+    code: str | None = None,
+    held: dict[str, Any] | None = None,
+) -> None:
     """Audit an admitted crossing answered WITHOUT its handler running.
 
     The repeat guard (``outcome="repeat"``) and the effect ledger's replay
@@ -183,6 +191,8 @@ def audit_answered(name: str, args: dict[str, Any], ctx: ToolContext, outcome: s
         tool=name,
         outcome=outcome,
         remote_tool=remote if isinstance(remote, str) else None,
+        code=code,
+        held=held,
     )
 
 
@@ -574,6 +584,8 @@ def audit_cross_tenant(
     dry_run: bool = False,
     reason: str = "",
     remote_tool: str | None = None,
+    code: str | None = None,
+    held: dict[str, Any] | None = None,
 ) -> None:
     """One ``audit_log`` row for a call that reached (or tried to reach) another tenant.
 
@@ -593,9 +605,11 @@ def audit_cross_tenant(
             "target_tenant": target_tenant,
             "user_id": user_id,
             "tool": tool,
-            "outcome": outcome,
+            "outcome": code or outcome,
             "dry_run": dry_run,
         }
+        if held:
+            details["held"] = {k: str(v)[:128] for k, v in held.items()}
         if reason:
             details["reason"] = redact(reason[:4096])[:300]
         if remote_tool:
