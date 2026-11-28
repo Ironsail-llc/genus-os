@@ -620,15 +620,12 @@ def test_a_writes_audit_says_unknown_unless_it_is_a_clean_answer(
     assert row["status"] == status
 
 
-def test_a_database_error_checking_the_grant_is_audited_and_refused_cleanly(
-    engine, audit_rows, monkeypatch
-):
+def test_a_database_error_checking_the_grant_is_audited_and_refused_cleanly(engine, audit_rows):
     def broken(tenant):
         raise ConnectionError("database unavailable")
 
-    monkeypatch.setattr("robothor.crm.dal.tenant_child_data_access", broken)
-
-    response = _engine_client().post(CALL, json=_body(requested_by=None))
+    with patch("robothor.crm.dal.tenant_child_data_access", new=broken):
+        response = _engine_client().post(CALL, json=_body(requested_by=None))
 
     assert response.status_code == 503
     assert response.json()["error"] == "remote_unavailable"
@@ -637,15 +634,14 @@ def test_a_database_error_checking_the_grant_is_audited_and_refused_cleanly(
     assert row["status"] == "denied"
 
 
-def test_a_tenant_without_an_engine_url_is_audited_and_refused_cleanly(
-    engine, audit_rows, monkeypatch
-):
+def test_a_tenant_without_an_engine_url_is_audited_and_refused_cleanly(engine, audit_rows):
     async def no_url(*a, **k):
         raise ValueError("no engine URL for this tenant")
 
-    monkeypatch.setattr("routers._engine_client.engine_request", no_url)
-
-    response = _engine_client().post(CALL, json=_body(access="write", request_id="eff-1"))
+    # A context, not monkeypatch: the autouse fixture's own patch of this name
+    # is undone first, so a monkeypatch would restore the fake for later tests.
+    with patch("routers._engine_client.engine_request", new=no_url):
+        response = _engine_client().post(CALL, json=_body(access="write", request_id="eff-1"))
 
     assert response.status_code == 503
     assert response.json()["error"] == "remote_unavailable"
