@@ -24,6 +24,7 @@ def test_every_refusal_code_in_the_contract():
                 "remote_bad_arguments",
                 "remote_outcome_unknown",
                 "remote_request_mismatch",
+                "remote_unavailable",
                 "remote_too_large",
                 "remote_timeout",
             }
@@ -32,6 +33,14 @@ def test_every_refusal_code_in_the_contract():
     )
     assert rc.ERR_TIMEOUT == "remote_timeout"
     assert rc.ERR_REQUEST_MISMATCH == "remote_request_mismatch"
+    assert rc.ERR_UNAVAILABLE == "remote_unavailable"
+
+
+def test_the_bridges_unavailable_answer_is_a_clean_refusal():
+    # Nothing was forwarded: a write that got it never reached the child.
+    assert rc.is_clean_refusal(503, {"error": rc.ERR_UNAVAILABLE})
+    assert not rc.is_clean_refusal(503, {"error": "something else"})
+    assert not rc.is_clean_refusal(500, {"error": rc.ERR_UNAVAILABLE})
 
 
 def test_outcomes_access_and_names():

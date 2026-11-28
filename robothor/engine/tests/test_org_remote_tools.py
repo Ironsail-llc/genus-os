@@ -984,3 +984,47 @@ def test_a_targets_own_refusal_sentence_is_kept_in_the_audit(env):
 
     (row,) = _rows(env)
     assert "Needs an agreement." in row["reason"]
+
+
+# ── A call interrupted on the way still leaves its audit row ────────────────
+
+
+def test_a_write_interrupted_by_an_unexpected_error_is_audited_as_maybe_reached(env):
+    from robothor.engine.tools.handlers import org_remote
+
+    async def broken(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("boom")
+
+    with patch.object(org_remote, "_send", broken):
+        result = _call("org_tool_write", _write())
+
+    assert result["error"]
+    (row,) = _rows(env)
+    assert row["outcome"] == "unknown"
+    assert "may have reached" in row["reason"]
+
+
+def test_a_cancelled_write_is_audited_as_maybe_reached(env):
+    from robothor.engine.tools.handlers import org_remote
+
+    async def cancelled(*a: Any, **k: Any) -> Any:
+        raise asyncio.CancelledError
+
+    with patch.object(org_remote, "_send", cancelled), pytest.raises(asyncio.CancelledError):
+        _call("org_tool_write", _write())
+
+    (row,) = _rows(env)
+    assert row["outcome"] == "unknown"
+
+
+def test_an_interrupted_read_is_audited_as_an_error(env):
+    from robothor.engine.tools.handlers import org_remote
+
+    async def broken(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("boom")
+
+    with patch.object(org_remote, "_send", broken):
+        _call("org_tool_read", _read())
+
+    (row,) = _rows(env)
+    assert row["outcome"] == "error"
