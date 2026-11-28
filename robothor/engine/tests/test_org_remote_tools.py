@@ -877,7 +877,7 @@ def _write_args(**over: Any) -> dict[str, Any]:
     return {"tenant": CHILD_A, "tool": "example_write", "args": {"id": 7, "note": "x"}, **over}
 
 
-def test_org_tool_write_fences_by_tenant_tool_and_argument_digest():
+def test_org_tool_write_fences_by_tenant_and_tool_never_by_wording():
     from robothor.engine.runtime import effect_tools
     from robothor.tenancy.remote_contract import args_digest
 
@@ -891,17 +891,22 @@ def test_org_tool_write_fences_by_tenant_tool_and_argument_digest():
     assert effect_tools.fences_whole_tool("org_tool_write") is False
     key = effect_tools.target_key("org_tool_write", target)
     assert key is not None
-    for other in (
-        _write_args(tenant=CHILD_B),
-        _write_args(tool="example_other"),
-        _write_args(args={"id": 8, "note": "x"}),
-    ):
-        assert (
-            effect_tools.target_key(
-                "org_tool_write", effect_tools.target_of("org_tool_write", other)
-            )
-            != key
+
+    def key_of(args: dict[str, Any]) -> str | None:
+        return effect_tools.target_key(
+            "org_tool_write", effect_tools.target_of("org_tool_write", args)
         )
+
+    for other in (_write_args(tenant=CHILD_B), _write_args(tool="example_other")):
+        assert key_of(other) != key
+    # A reworded retry is the same target: it must wait for the uncertain one.
+    for reworded in (
+        _write_args(args={"id": 8, "note": "x"}),
+        _write_args(args={"id": 7, "note": "x", "memo": ""}),
+        _write_args(args={"id": "7", "note": "reworded"}),
+        _write_args(tenant=f"  {CHILD_A} "),
+    ):
+        assert key_of(reworded) == key
 
 
 def test_the_stored_target_holds_the_digest_never_the_arguments():
@@ -1046,3 +1051,47 @@ def test_a_read_with_dry_run_is_refused_before_sending(env):
 
     _refused(result, env)
     assert env.bridge.requests == []
+
+
+# ── A replayed failure reads as the failure it was ──────────────────────────
+
+
+def test_a_replayed_error_is_reported_as_the_error_it_was(env):
+    env.bridge.answer = (
+        200,
+        {
+            "outcome": "replayed",
+            "original_outcome": "error",
+            "request_id": "eff-1",
+            "tool": "example_write",
+            "result": {"error": "slot already taken"},
+            "would": None,
+        },
+    )
+
+    result = _call("org_tool_write", _write())
+
+    assert "slot already taken" in result["error"]
+    assert result["outcome"] == "replayed"
+    (row,) = _rows(env)
+    assert row["outcome"] == "error"
+
+
+def test_a_replayed_success_is_a_success(env):
+    env.bridge.answer = (
+        200,
+        {
+            "outcome": "replayed",
+            "original_outcome": "ok",
+            "request_id": "eff-1",
+            "tool": "example_write",
+            "result": {"rows": 1},
+            "would": None,
+        },
+    )
+
+    result = _call("org_tool_write", _write())
+
+    assert "error" not in result
+    (row,) = _rows(env)
+    assert row["outcome"] == "replay"
