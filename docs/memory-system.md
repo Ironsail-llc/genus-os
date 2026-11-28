@@ -24,31 +24,81 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 
 All embedding columns are `vector(1024)` with HNSW indexes (m=16, ef_construction=200).
 Active-row **partial** HNSW indexes (`idx_*_active`, migrations 073/074) keep
-superseded vectors out of the candidate budget. pgvector **0.8.2** is installed;
-every vector search applies shared session tuning via
-`robothor/memory/vector_tuning.py` `apply_hnsw_session(cur)` —
-`hnsw.ef_search=100` plus, when `MEMORY_HNSW_ITERATIVE=1`,
-`hnsw.iterative_scan=relaxed_order` (fetches past the `WHERE` filter until `LIMIT`
-is met — the robust fix for filtered-vector recall).
+superseded vectors out of the candidate budget. Every pooled connection gets
+an **iterative index scan** at checkout (`hnsw.iterative_scan=relaxed_order`,
+`ANN_ITERATIVE_SCAN_MODE` in `robothor/db/connection.py`, which records why
+relaxed rather than strict order). Without it, a search under a narrow tenant
+or person filter spends the candidate budget on other rows and comes back
+with fewer rows than exist. Relaxed order may return rows slightly out of
+distance order, so the fact vector leg re-sorts by similarity before ranking.
+Every vector search also applies `robothor/memory/vector_tuning.py`
+`apply_hnsw_session(cur)`: `hnsw.ef_search=100`, and with
+`MEMORY_HNSW_ITERATIVE=1` the same scan mode again inside the transaction
+plus `hnsw.max_scan_tuples` (20000).
 
 ## Retrieval
 
-`search_facts(query, …)` implements hybrid retrieval:
+`search_facts(query, …)` ranks every source through one path. The contract a
+source ("leg") implements is in `robothor/memory/recall.py`.
 
-1. Vector search (HNSW cosine, top 30)
-2. BM25 keyword search (GIN tsvector, top 30)
-3. **Reciprocal Rank Fusion** (k=60)
-4. Optional entity-graph expansion (follow relations)
-5. Optional **cross-encoder reranker** (Qwen3-Reranker-0.6B) — on by default; kill-switch via `MEMORY_RERANK_ENABLED=0`
-6. Optional appended `memory_insights`, `memory_episodes`, and verbatim `chat_messages` (low-weight RRF merge)
+1. **Legs.** Each returns `Candidate`s, best first, up to `max(30, limit × 3)`:
+   - `vector` — HNSW cosine over `memory_facts`. The query is embedded with the
+     instruction the embedding model expects on queries
+     (`Instruct: …\nQuery:…` for Qwen3-Embedding); stored documents are
+     embedded bare, so nothing is re-embedded.
+   - `keyword` — PostgreSQL full text (`websearch_to_tsquery`, GIN index on
+     `tsv`), scored by `ts_rank_cd` with length normalisation into 0..1. It
+     requires every term first and falls back to any term when that matches
+     nothing, so a natural-language question still finds the fact that shares
+     most of its words. The first pass reads the query in web-search syntax:
+     `"quoted words"` match as a phrase, `-word` excludes, and `or` is an
+     operator.
+   - `entity_expansion` (`expand_entities`) — facts about entities related to
+     the top hits' entities.
+   - `insight`, `episode`, `chat_turn` (`include_insights`,
+     `include_episodes`, `include_chat_turns`). These stores cannot filter by
+     person, so a restricted data scope leaves them out.
+2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`); each row
+   records its rank in every leg that found it (`leg_ranks`).
+3. **Reranker** (Qwen3-Reranker-0.6B, local) — on by default, off with
+   `MEMORY_RERANK_ENABLED=0`. It scores the first 16 fused candidates
+   (`MEMORY_RERANK_MAX_CANDIDATES`) with a graded relevance in 0..1: the
+   probability of "yes" against "no", read from the top 20 logprobs Ollama
+   returns. When one of the two is not listed, its logprob is bounded by the
+   lowest one listed, so a confident answer still gets a graded score. (An
+   Ollama without logprobs gives 1 or 0.) Candidates are ordered by that
+   score alone, whichever leg found them. On any reranker error the fused
+   order stands.
+4. **Blend** — `relevance` (the rerank score, or `10 / (10 + fused rank)` when
+   there is none — one 0..1 scale for every leg; cosine similarity is not used)
+   + recency + importance + access count, with supersession demotion; then
+   near-duplicates are dropped.
+5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps at
+   least that many places in the top `limit` whenever it returned anything,
+   chosen by its own score: `entity_expansion` 1, and `graph` 2 for a graph leg.
+   A related-but-not-similar fact is exactly what a query-document reranker
+   discards. Reserved picks take at most `(limit - 1) // 2` places in total
+   (none at a `limit` of 1 or 2), never the top result, and never a
+   near-duplicate of a row already returned.
+
+Every leg shares `limit`. Returned rows keep their fields and add `kind`,
+`leg_ranks`, `leg_scores`, `rrf_score`, `fused_rank`, `rerank_score` and
+`relevance`. The search path is read-only.
+
+Flags that still shape this path: `MEMORY_RANK_BLEND=0` skips the blend (fused
+or reranked order, cut to `limit`); `MEMORY_DEDUP=0` keeps near-duplicates;
+`MEMORY_TEMPORAL_COHERENCE=1` turns on supersession inference among decisions;
+`MEMORY_RERANK_WIDE=1` widens the leg fetch to 45 and the reranker's survivor
+pool, and gives rows scoring at least 0.5 a small blend bonus.
+`MEMORY_EPISODE_MERGE` is no longer read: the auxiliary stores are fused legs on
+every path. `MEMORY_NARROW_SEARCH` is read by the `search_memory` tool, which
+decides the `include_*` arguments.
 
 ### Memory router (RIP 15)
 
-The `search_memory` tool previously hard-coded `expand_entities + insights +
-episodes = True` on *every* call — a full fan-out for even a trivial lookup.
-When `ROBOTHOR_RIP_15_ENABLED` is set, it routes through
-`robothor/memory/router.py`, which classifies the query (heuristics) and queries
-only the stores that fit:
+Off unless `ROBOTHOR_RIP_15_ENABLED` is set. When it is, the `search_memory`
+tool routes through `robothor/memory/router.py`, which classifies the query
+(heuristics) and queries only the stores that fit:
 
 | Class | Stores | Notes |
 |-------|--------|-------|
@@ -59,9 +109,9 @@ only the stores that fit:
 | `intent` | standing intents + facts | |
 | `default` | facts + insights | no episode/entity fan-out |
 
-Results from each store are fused with the shared `rrf_fuse` (k=60, in
-`robothor/memory/fusion.py`) and budget-capped. `search_facts()` keeps its
-signature for back-compat; only the tool path changes.
+The facts it gets come from `search_facts` (ranked as above); the stores are
+then merged with `rrf_fuse` (k=60, `robothor/memory/fusion.py`) and
+budget-capped. Without the flag the tool calls `search_facts` directly.
 
 ## Symbolic short-term memory (RIP 13)
 
