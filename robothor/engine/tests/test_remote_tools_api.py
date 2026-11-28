@@ -89,9 +89,12 @@ class _Handlers:
         self.calls: list[tuple[str, dict[str, Any], Any]] = []
         self.delay = 0.0
         self.risky_result: Any = {"done": True}
+        self.lookup_result: Any = None
 
     async def lookup(self, args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         self.calls.append(("acme_lookup", args, ctx))
+        if self.lookup_result is not None:
+            return dict(self.lookup_result)
         return {"record": {"id": 7, "note": RESULT_SECRET}}
 
     async def update(self, args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
@@ -1012,3 +1015,51 @@ def test_check_details_scrub_a_windows_path() -> None:
     from robothor.engine.remote_tools import _clean
 
     assert "acme" not in _clean(r"config at C:\Users\acme\conf.yaml")
+
+
+# ── a result that is not plain JSON ──────────────────────────────────────────
+
+
+def _awkward() -> dict[str, Any]:
+    import datetime
+    import decimal
+    import uuid
+
+    return {
+        "at": datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC),
+        "amount": decimal.Decimal("12.50"),
+        "id": uuid.UUID("12345678-1234-5678-1234-567812345678"),
+        "ratio": float("nan"),
+        "limit": float("inf"),
+    }
+
+
+async def test_a_write_with_a_non_json_result_answers_once_and_replays(world) -> None:
+    world.handlers.risky_result = _awkward()
+
+    first = await _call(**_risky())
+    again = await _call(**_risky())
+
+    assert first.status_code == 200, first.text
+    payload = first.json()
+    assert payload["outcome"] == rc.OUTCOME_OK
+    assert payload["result"]["amount"] == "12.50"
+    assert payload["result"]["at"].startswith("2026-01-02")
+    assert payload["result"]["id"] == "12345678-1234-5678-1234-567812345678"
+    assert isinstance(payload["result"]["ratio"], str)
+    assert isinstance(payload["result"]["limit"], str)
+    assert again.status_code == 200, again.text
+    assert again.json()["outcome"] == rc.OUTCOME_REPLAYED
+    assert again.json()["result"] == payload["result"]
+    assert [c[0] for c in world.handlers.calls] == ["acme_risky"]
+    assert world.ledger.rows[(CHILD, "req-1")]["state"] == "done"
+
+
+async def test_a_read_with_a_non_json_result_answers(world) -> None:
+    world.handlers.lookup_result = {"record": _awkward()}
+
+    answer = await _call(**_body())
+
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["outcome"] == rc.OUTCOME_OK
+    assert answer.json()["result"]["record"]["amount"] == "12.50"
