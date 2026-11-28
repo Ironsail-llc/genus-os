@@ -51,6 +51,8 @@ from robothor.tenancy.remote_contract import (
     ERR_WRITE_FORBIDDEN,
     SCOPE_ORG_REMOTE,
     args_digest,
+    is_clean_refusal,
+    is_known_answer,
 )
 from routers import _engine_client
 from routers._audit import audited
@@ -220,18 +222,26 @@ async def remote_call(request: Request) -> JSONResponse:
         target,
         forwarded,
         body,
-        status=(
-            "unknown"
-            if isinstance(answer, dict) and answer.get("outcome_unknown") is True
-            else "ok"
-            if status == 200
-            else ("denied" if status in (403, 404, 409, 413, 422) else "error")
-        ),
+        status=_call_status(call["access"], status, answer),
         reason=str(answer.get("error") or "") if isinstance(answer, dict) else "",
         http_status=status,
         outcome=outcome,
     )
     return JSONResponse(status_code=status, content=answer)
+
+
+def _call_status(access: str, status: int, answer: Any) -> str:
+    """How a forwarded call reads in the audit: for a write, anything but a
+    known answer or a refusal given before it ran is ``unknown``."""
+    if isinstance(answer, dict) and answer.get("outcome_unknown") is True:
+        return "unknown"
+    if status == 200 and is_known_answer(answer):
+        return "ok"
+    if is_clean_refusal(status, answer):
+        return "denied"
+    if access == ACCESS_WRITE:
+        return "unknown"
+    return "denied" if status in (403, 404, 409, 413, 422) else "error"
 
 
 def _audit_call(

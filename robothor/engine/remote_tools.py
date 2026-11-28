@@ -475,6 +475,25 @@ def _answer(
     }
 
 
+def _plain(result: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """``result`` as strict JSON (anything else as text, NaN and infinities as
+    strings), and its encoded size."""
+
+    def _text_constant(name: str) -> str:
+        return name  # NaN, Infinity, -Infinity: kept as their names
+
+    try:
+        text = json.dumps(result, default=str)
+        plain = json.loads(text, parse_constant=_text_constant)
+        encoded = json.dumps(plain, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        plain = {"result_unencodable": True, "type": type(result).__name__}
+        encoded = json.dumps(plain)
+    if not isinstance(plain, dict):
+        plain = {"result": plain}
+    return plain, len(encoded.encode("utf-8"))
+
+
 def _rbac_denied(result: dict[str, Any]) -> bool:
     return bool(result.get("refused")) and result.get("gate") == "role"
 
@@ -697,10 +716,10 @@ async def _dispatch(
             except Exception:  # noqa: BLE001 - a kept claim is a 409 later, never a re-run
                 logger.warning("remote tool request claim could not be released", exc_info=True)
         raise Refused(403, rc.ERR_NOT_PERMITTED)
-    try:
-        size = len(json.dumps(result, default=str).encode("utf-8"))
-    except (TypeError, ValueError):
-        size = rc.REMOTE_RESULT_MAX_BYTES + 1
+    # One plain-JSON copy of the result, used for the size, the ledger and the
+    # answer alike: a datetime, Decimal, UUID or NaN would otherwise pass the
+    # size check, be stored, and then fail to render AFTER the write ran.
+    result, size = _plain(result)
     outcome = rc.OUTCOME_ERROR if "error" in result else rc.OUTCOME_OK
     settle = _DONE
     unknown = False
