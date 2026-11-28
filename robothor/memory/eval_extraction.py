@@ -649,6 +649,42 @@ def _failures(
 # ── the run ────────────────────────────────────────────────────────────────
 
 
+#: How long the one-token probe of a named local model may take (a cold load).
+PROBE_TIMEOUT_S = 180.0
+
+#: The benchmark marker the measurement runs under (``benchmark_run_scope``).
+BENCHMARK_AGENT_ID = "memory-eval-extraction"
+
+
+async def _probe_local_model(model: str) -> None:
+    """One short call to a named local model, straight to Ollama.
+
+    Through the generation module a model that does not answer fails inside
+    ``_local_leg``, which pages the operator that memory generation is down
+    and names the instance's own model, not this one. So the model is asked
+    once here first, the way the answer arm talks to Ollama, and a model that
+    does not answer stops the run with a message saying so.
+    """
+    from robothor.llm import ollama
+
+    try:
+        await asyncio.wait_for(
+            ollama.chat(
+                [{"role": "user", "content": "Reply with OK."}],
+                model=model,
+                temperature=0.0,
+                max_tokens=4,
+                think=False,
+            ),
+            timeout=PROBE_TIMEOUT_S,
+        )
+    except Exception as exc:  # noqa: BLE001 — any failure means it cannot be measured
+        raise EvalPreconditionError(
+            f"the local model {model!r} did not answer ({type(exc).__name__}: {exc}); "
+            f"check that Ollama is running and the model is pulled (ollama pull {model})"
+        ) from exc
+
+
 def _model_label(model: str | None) -> str:
     from robothor.llm import ollama
     from robothor.memory import generation
@@ -676,8 +712,36 @@ async def run_extraction_eval(
     remote memory generation is on, which would answer with its own model
     instead. Without it the generation module's model answers, as in ingest.
     The judge always runs on a named local model (``judge_model``, default the
-    local generation model). ``llm`` and ``extract`` are for tests.
+    local generation model). Each named model is probed once before anything
+    else (:func:`_probe_local_model`). Everything runs as benchmark traffic
+    (``benchmark_run_scope``): an alert raised on the way, such as "memory
+    generation is down", goes to the benchmark digest, never to the operator.
+    ``llm`` and ``extract`` are for tests (an injected one is not probed).
     """
+    from robothor.engine.run_context import benchmark_run_scope
+
+    with benchmark_run_scope(True, agent_id=BENCHMARK_AGENT_ID):
+        return await _run_extraction_eval(
+            path,
+            model=model,
+            judge_model=judge_model,
+            repeats=repeats,
+            concurrency=concurrency,
+            llm=llm,
+            extract=extract,
+        )
+
+
+async def _run_extraction_eval(
+    path: str | Path,
+    *,
+    model: str | None,
+    judge_model: str | None,
+    repeats: int,
+    concurrency: int,
+    llm: LlmJudge | None,
+    extract: ExtractFn | None,
+) -> dict[str, Any]:
     from robothor.llm import ollama
     from robothor.memory import generation
 
@@ -690,6 +754,10 @@ async def run_extraction_eval(
     conversations = load_fixtures(path)
     labels = {f.id: f for c in conversations for f in c.facts}
     judge_name = judge_model or ollama.GENERATION_MODEL
+    if model and extract is None:
+        await _probe_local_model(model)
+    if llm is None:
+        await _probe_local_model(judge_name)
     judge = make_fact_judge(llm if llm is not None else local_llm_judge(judge_name))
     started = time.perf_counter()
     validation = await require_valid_fact_judge(conversations, judge)
