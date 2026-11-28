@@ -130,9 +130,9 @@ async def _declared(tool: str) -> tuple[dict[str, Any], dict[str, Any]]:
 #: Absolute-looking paths in a check's detail: where an instance keeps its
 #: files is not a fact another tenant gets.
 _PATH_RE = re.compile(r"(?:[A-Za-z]:)?(?:[\\/][^\s\\/'\"]+){2,}[\\/]?")
-#: A URL in a check's detail. Its scheme, host, port and path are kept; its
-#: credentials (``user:pass@``), query and fragment are dropped.
-_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>]+")
+#: A URL in a check's detail. Only its scheme, host and port are kept: its
+#: credentials (``user:pass@``), path, query and fragment are dropped.
+_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>]*[^\s'\"<>.,:;)\]]")
 _DETAIL_MAX = 200
 
 
@@ -145,12 +145,14 @@ def _bare_url(match: re.Match[str]) -> str:
         port = f":{parts.port}" if parts.port else ""
     except ValueError:
         return "<url>"
-    return f"{parts.scheme}://{host}{port}{parts.path}"
+    # Nothing after the authority: services carry credentials in the path
+    # (webhook tokens, bot tokens), and the redactor knows none of them.
+    return f"{parts.scheme}://{host}{port}"
 
 
 def _clean(text: str) -> str:
     """A check's detail as another tenant may read it: secrets redacted,
-    filesystem paths replaced, URLs kept without credentials or query."""
+    filesystem paths replaced, URLs cut to scheme, host and port."""
     from robothor.secrets.redaction import redact
 
     urls: list[str] = []
