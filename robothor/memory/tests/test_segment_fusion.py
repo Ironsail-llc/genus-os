@@ -269,3 +269,17 @@ async def test_the_segment_legs_read_with_the_same_visibility_filter(
         assert "test-tenant" in sent
         flat = list(sent)
         assert all(p in flat for p in params)
+
+
+def test_the_judged_segment_is_marked_when_it_takes_the_last_place() -> None:
+    from robothor.memory.facts import _last_in_head
+
+    rows = [
+        {"kind": "fact", "id": 1},
+        {"kind": "segment", "id": 7},
+        {"kind": "fact", "id": 2},
+    ]
+    out = _last_in_head(rows, ("segment", 7))
+    assert [(r["kind"], r["id"]) for r in out] == [("fact", 1), ("fact", 2), ("segment", 7)]
+    assert out[-1].get("judged_in") is True
+    assert all("judged_in" not in r for r in out[:-1])
