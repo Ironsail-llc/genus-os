@@ -16,8 +16,17 @@ refused while remote memory generation is on, because the remote path ignores
 a named model. Without it the generation module's own model extracts, as in
 ingest, and the report counts any remote calls that fell back to local.
 `--repeats N` extracts every conversation N times (the extraction samples at
-the generation module's default temperature, so runs differ). Exit `0` when it
-ran, `3` when it could not.
+the generation module's default temperature, so runs differ).
+
+Each named model is asked once, straight to Ollama, before anything else, and a
+model that does not answer stops the run with exit `3`. The whole run is
+benchmark traffic (`benchmark_run_scope`): an alert raised inside it, such as
+"memory generation is down" when a local call fails, goes to the benchmark
+digest and never to the operator.
+
+Exit codes: `0` ran (and, with `--baseline`, did not regress), `2` regressed
+against the baseline, `3` could not run (a broken label, a model that did not
+answer, a judge that failed validation, a baseline for another model or split).
 
 ## The labelled set
 
@@ -84,6 +93,58 @@ kind right, and 95% of right and wrong pooled, or the run stops:
 | Details kept | The values a label must keep (a list's items, the value something changed from) |
 | Third-party facts stored as the operator's | Labels whose trust must be `external` that were extracted as `user_stated` |
 | Unlabelled user-stated facts from relaying turns | Extracted facts that match no label, are stored as the operator's, and cite a turn carrying someone else's words. They need a person to read them |
+| Guest claims written as the user | Extracted facts that cite only guests' turns and still say "the user" |
+| Precision by stored origin | Precision of `user_stated`, `agent_generated` and `external` facts separately |
+| Judge errors | Pairs the LLM judge raised on while scoring. Each is logged as a warning and counted as no match |
+
+## The baseline, and what a regression is
+
+[`conversation-facts-baseline.yaml`](conversation-facts-baseline.yaml) records
+the measurement below for `qwen3:8b` on the dev labels: each metric pooled
+over three runs, and a tolerance for each.
+
+```bash
+robothor memory-eval --extraction --extraction-model qwen3:8b --judge-model qwen3:8b \
+  --concurrency 1 --repeats 2 --baseline docs/benchmarks/memory/conversation-facts-baseline.yaml
+```
+
+The run is compared metric by metric. It exits `2` when any metric moved the
+wrong way by more than its tolerance: below the baseline for a rate, above it
+for a count (third-party facts stored as the operator's, guest claims written
+as the user, facts from filler). Counts are per run, so runs with different
+`--repeats` compare.
+
+**Tolerance** is the spread of the recorded runs, max minus min, rounded up to
+a whole point for a rate and a whole count for a count, and never less than
+one unit. On these three runs recall ranged from 80.0% to 90.9%, so its
+tolerance is 11 points, and precision's is 8 points. A smaller regression is
+not caught. The run-to-run spread at temperature 0.7 is that wide, and a
+narrower tolerance would fail runs that changed nothing. More repeats would
+narrow it.
+
+**Thresholds** in the same file are **PROPOSED**, pending the operator's
+agreement. Each run reports them as met or not met. They never change the
+exit code while their status is `PROPOSED`:
+
+| Threshold | Proposed |
+|-----------|----------|
+| Third-party facts stored as the operator's | 0 per run |
+| Guest claims written as the user | 0 per run |
+| Dated facts dated right | at least 90% |
+| Undated facts left undated | at least 90% |
+| Recall | at least 85% |
+| Trust label accuracy | at least 95% |
+| Precision of `user_stated` facts | at least 90% |
+
+`--record-baseline` with `--extraction` writes a run as the new baseline (to
+`--baseline`, or beside the fixtures), keeping the file's thresholds block.
+Record from two or more repeats, so the tolerance has a spread to come from.
+
+## Not in this change
+
+The measurement of hosted models, and a run on a development subset of a
+public conversation-memory benchmark, are separate follow-up work. Only the
+local model was run.
 
 ## Results
 
@@ -96,7 +157,8 @@ generation module's default temperature (0.7), so the runs differ. Turn times
 are fixed in the labelled set, so the run date does not matter. There is no
 context turn and one window per conversation. Three runs in all, one alone and
 then two together (`--repeats 2`), at concurrency 1, on the harness as of
-branch commit `b91755323`. A run takes about 4.5 minutes of extraction and
+the commit that gave the judge its subject-aware question (`beb6230ea` on the
+branch). A run takes about 4.5 minutes of extraction and
 1.5 minutes of judge validation.
 
 Judge validation, identical in all three runs: 79/80 planted paraphrases
@@ -148,8 +210,8 @@ Run to run:
 | Run | Recall | Precision | Trust | Date | Extracted |
 |-----|--------|-----------|-------|------|-----------|
 | 1 (alone) | 90.9% (50/55) | 65.3% (66/101) | 90.8% | 55.4% | 101 |
-| 2 | 80.0% | 58.3% | 94.7% | 61.4% | 102 |
-| 3 | 85.5% | 64.0% | 96.7% | 53.3% | 101 |
+| 2 | 80.0% (44/55) | 58.3% (60/103) | 94.7% | 61.4% | 103 |
+| 3 | 85.5% (47/55) | 64.0% (64/100) | 96.7% | 53.3% | 100 |
 
 **How to read precision.** It counts every extracted fact that matches no
 label as wrong, and the labels hold little of the assistant's advice. By

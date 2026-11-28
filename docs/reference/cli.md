@@ -845,7 +845,7 @@ Usage: `genus legacy-goal remove-target <target_id> [--json]`
 
 Run the memory retrieval benchmark suite.
 
-Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [--record] [--triggered-by TRIGGERED_BY] [--world] [--world-seed WORLD_SEED] [--world-size WORLD_SIZE] [--split SPLIT] [--answers] [--systems SYSTEMS] [--reference REFERENCE] [--token-budget TOKEN_BUDGET] [--repeats REPEATS] [--answer-model ANSWER_MODEL] [--judge-model JUDGE_MODEL] [--limit-per-stratum LIMIT_PER_STRATUM] [--concurrency CONCURRENCY] [--cache-dir CACHE_DIR] [--report REPORT] [--progress PROGRESS] [--extraction] [--fixtures FIXTURES] [--extraction-model EXTRACTION_MODEL] [--record-baseline]`
+Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [--record] [--triggered-by TRIGGERED_BY] [--world] [--world-seed WORLD_SEED] [--world-size WORLD_SIZE] [--split SPLIT] [--answers] [--systems SYSTEMS] [--reference REFERENCE] [--token-budget TOKEN_BUDGET] [--repeats REPEATS] [--answer-model ANSWER_MODEL] [--judge-model JUDGE_MODEL] [--limit-per-stratum LIMIT_PER_STRATUM] [--concurrency CONCURRENCY] [--cache-dir CACHE_DIR] [--report REPORT] [--progress PROGRESS] [--extraction] [--fixtures FIXTURES] [--baseline BASELINE] [--extraction-model EXTRACTION_MODEL] [--record-baseline]`
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
@@ -873,8 +873,9 @@ Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [-
 | `--progress` | `PROGRESS` | — | Append each judged case to this JSONL; rerunning with it resumes |
 | `--extraction` | — | off | Measure conversation fact extraction on the labelled set (no database) |
 | `--fixtures` | `FIXTURES` | `docs/benchmarks/memory/conversation-facts.yaml` | With --extraction: the labelled conversations |
+| `--baseline` | `BASELINE` | — | With --extraction: compare against this recorded baseline; exit 2 on a regression |
 | `--extraction-model` | `EXTRACTION_MODEL` | — | With --extraction: the local model that extracts (default: the generation model) |
-| `--record-baseline` | — | off | Also write the report as the recorded world baseline under docs/benchmarks/memory/ |
+| `--record-baseline` | — | off | Write the report as the recorded baseline (world: under docs/benchmarks/memory/; extraction: to --baseline, or beside the fixtures) |
 
 ## `genus memory-replay`
 

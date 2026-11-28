@@ -1388,6 +1388,12 @@ Dates are the weak point. 74% of dated facts get the right day, and only 50% of
 undated facts are left undated. A text pasted in quotation marks with no
 marker is still stored as the operator's own.
 
+`--baseline docs/benchmarks/memory/conversation-facts-baseline.yaml` compares a
+run against these recorded numbers and exits 2 when a metric regressed beyond
+the spread of the recorded runs. That is the check a later change to the
+extraction must pass. The thresholds in the same file are proposed and only
+reported.
+
 ### Who can read a fact
 
 A fact has an owner, `memory_facts.scope_kind` / `scope_id`, written by the
