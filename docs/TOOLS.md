@@ -2048,7 +2048,10 @@ the ledger and never sent twice. Each call can take up to 180 seconds.
 Every call, allowed or refused, writes an `agent.cross_tenant_call` row under
 the home tenant with `tool` set to `org_tools`, `org_tool_read` or
 `org_tool_write` and `details.remote_tool` naming the child's tool; the child
-writes its own `agent.remote_tool_call` row. Results are wrapped as untrusted
+writes its own `agent.remote_tool_call` row, whose `status` is one word (`ok`,
+`error`, `denied`, `dry_run`, `replayed`, `unknown`) and whose
+`details.outcome` holds the exact code. Neither row carries the arguments or
+the child's own error text. Results are wrapped as untrusted
 content: they come from the child's systems.
 
 **Which to use.** For a child's tasks, runs, notes, people and other CRM data,
