@@ -534,9 +534,13 @@ async def extract_conversation_facts(
     context: list[ConversationTurn] | tuple[()] = (),
     timeout: float = 180.0,
     max_retries: int = 3,
+    model: str | None = None,
 ) -> Extraction:
     """One window's facts: one model call, retried only when the answer is not
-    the JSON asked for (or the call failed). ``error`` as in ``facts.Extraction``."""
+    the JSON asked for (or the call failed). ``error`` as in ``facts.Extraction``.
+
+    ``model`` names the local model (the memory eval measures one); without it
+    the generation module's own model answers, as in ingest."""
     prompt = build_conversation_prompt(window, context=context)
 
     async def _run() -> Extraction:
@@ -549,6 +553,7 @@ async def extract_conversation_facts(
                     max_tokens=generation.EXTRACTION_MAX_TOKENS,
                     format=CONVERSATION_EXTRACTION_SCHEMA,
                     think=False,
+                    model=model,
                 )
             except Exception as exc:
                 logger.warning("conversation extraction attempt %d failed: %s", attempt + 1, exc)
