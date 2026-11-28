@@ -1028,3 +1028,21 @@ def test_an_interrupted_read_is_audited_as_an_error(env):
 
     (row,) = _rows(env)
     assert row["outcome"] == "error"
+
+
+# ── dry_run where it does not belong ─────────────────────────────────────────
+
+
+def test_dry_run_inside_a_writes_args_is_refused_before_sending(env):
+    result = _call("org_tool_write", _write(args={"id": 7, "dry_run": True}))
+
+    message = _refused(result, env)
+    assert "top level" in message
+    assert env.bridge.requests == []
+
+
+def test_a_read_with_dry_run_is_refused_before_sending(env):
+    result = _call("org_tool_read", _read(dry_run=True))
+
+    _refused(result, env)
+    assert env.bridge.requests == []
