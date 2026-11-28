@@ -2028,11 +2028,14 @@ needs the parent's child data access and a per-tool grant of the child's
 `parent_agent` role). A refusal from the child keeps its code in
 `error_code` (`remote_tool_unknown`, `remote_attestation_missing`,
 `remote_not_permitted`, …) beside the sentence in `error`. A write the child
-cannot account for (`remote_outcome_unknown`, a timeout, or a write that
-failed with any error other than a control's refusal, since it may have acted
-first) is reported with `outcome_unknown: true` and a sentence saying the
-child's system may or may not have changed, and the effect ledger then fences
-an identical call until it is reconciled. A write that ran but whose result is over 256 kB is
+cannot account for (`remote_outcome_unknown`, a timeout, a 5xx or any answer
+that is neither a known outcome nor a refusal given before the call ran, or a
+child tool that reported `outcome_unknown` or crashed) is reported with
+`outcome_unknown: true` and a sentence saying the child's system may or may
+not have changed. The effect ledger then fences that same call (the same
+child, tool and arguments, compared by a digest) until it is reconciled;
+other calls of `org_tool_write`, and dry runs, are not held. A plain error the
+child's tool returned is a finished call (`outcome: "error"`), not unknown. A write that ran but whose result is over 256 kB is
 reported as done with `result: null`, `result_withheld` (`reason:
 "too_large"`, its size and the cap) and a note, never as a refusal, so the
 ledger records it and a retry replays it; a read over the cap is refused

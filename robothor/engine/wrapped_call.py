@@ -137,6 +137,9 @@ def _read_only_by_arguments(name: str, arguments: dict[str, Any]) -> bool:
     """
     if name == "pr_review_intake":
         return arguments.get("count_only") is True and not arguments.get("pr")
+    if name == "org_tool_write":
+        # A dry run passes every check in the child and executes nothing.
+        return arguments.get("dry_run") is True
     return False
 
 
