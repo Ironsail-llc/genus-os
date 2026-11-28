@@ -1009,7 +1009,7 @@ the reply.
 |-------|---------|
 | `as_of` | When the reply was assembled. |
 | `home_tenant_id` | The caller's tenant. |
-| `tenants` | One entry per descendant: `tenant_id`, `display_name`, `status` (`ok` or `error`), `error` (null when `ok`), and the engine's `plugins` (name, version, enabled), `tools` (name, plugin, `read` or `write`, attestations, short description) and `checks` (the plugins' doctor checks: name, status, short detail). |
+| `tenants` | One entry per descendant: `tenant_id`, `display_name`, `status` (`ok` or `error`), `error` (null when `ok`), and the engine's `plugins` (name, version, enabled), `tools` (name, plugin, `read` or `write`, attestations, short description) and `checks` (the plugins' doctor checks: name, status, short detail; secrets are redacted, filesystem paths replaced and any URL cut to its scheme, host and port). |
 
 Each descendant asked writes an `org.connections` audit row filed under it.
 
