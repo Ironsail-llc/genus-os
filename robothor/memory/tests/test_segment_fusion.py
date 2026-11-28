@@ -283,3 +283,57 @@ def test_the_judged_segment_is_marked_when_it_takes_the_last_place() -> None:
     assert [(r["kind"], r["id"]) for r in out] == [("fact", 1), ("fact", 2), ("segment", 7)]
     assert out[-1].get("judged_in") is True
     assert all("judged_in" not in r for r in out[:-1])
+
+
+# --------------------------------------------------------------------------- #
+# Without a working reranker the base rule stands
+# --------------------------------------------------------------------------- #
+
+
+def _thirty_two_leg_then_forty_one_leg() -> _Cursor:
+    both = _two_leg_facts(30)
+    more = [
+        _row(200 + i, f"Bob note {i}: crate {i * 3} was shipped", similarity=0.5 - i / 1000)
+        for i in range(40)
+    ]
+    return _Cursor(vector=[*both.vector, *more], keyword=both.keyword)
+
+
+async def _limit_50(env: pytest.MonkeyPatch, *, judge: bool) -> list[dict[str, Any]]:
+    """30 facts both fact legs found, then an answer segment found by both of
+    the segment store's legs (fused rank 30: past the 16-row head, inside
+    50), then 40 facts one leg found, so the pool is longer than the limit."""
+    from robothor.memory import facts
+
+    if not judge:
+        env.setattr(facts, "_segment_to_judge", lambda pool, head: None)
+    seg_cur = _both_legs(_segment_row(9001, ANSWER))
+    return await _search_with_segments(_thirty_two_leg_then_forty_one_leg(), seg_cur, limit=50)
+
+
+@pytest.mark.asyncio
+async def test_with_the_reranker_unavailable_the_fused_order_stands(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setattr(reranker, "check_reranker_available", AsyncMock(return_value=False))
+    with patch.object(reranker, "rerank_pair", _scorer({"4417": 0.95})):
+        rows = await _limit_50(env, judge=True)
+        base = await _limit_50(env, judge=False)
+
+    assert ("segment", 9001) in _keys(base), "the base rule returns the segment"
+    assert _keys(rows) == _keys(base)
+
+
+@pytest.mark.asyncio
+async def test_with_every_rerank_pair_failing_the_fused_order_stands(
+    env: pytest.MonkeyPatch,
+) -> None:
+    async def failing(client: Any, query: str, doc: str) -> float:
+        raise RuntimeError("reranker down")
+
+    with patch.object(reranker, "rerank_pair", failing):
+        rows = await _limit_50(env, judge=True)
+        base = await _limit_50(env, judge=False)
+
+    assert ("segment", 9001) in _keys(base), "the base rule returns the segment"
+    assert _keys(rows) == _keys(base)
