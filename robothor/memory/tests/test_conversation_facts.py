@@ -252,6 +252,22 @@ async def test_a_window_with_nothing_to_remember_is_not_asked_again() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_named_model_reaches_the_generation_call() -> None:
+    gen = AsyncMock(return_value=_answer())
+    with patch("robothor.memory.generation.generate", new=gen):
+        await extract_conversation_facts(_turns(), model="local-model:1b")
+    assert gen.call_args.kwargs["model"] == "local-model:1b"
+
+
+@pytest.mark.asyncio
+async def test_without_a_model_the_generation_default_applies() -> None:
+    gen = AsyncMock(return_value=_answer())
+    with patch("robothor.memory.generation.generate", new=gen):
+        await extract_conversation_facts(_turns())
+    assert gen.call_args.kwargs.get("model") is None
+
+
+@pytest.mark.asyncio
 async def test_an_unparseable_answer_is_retried_then_reported() -> None:
     gen = AsyncMock(return_value="{ not json")
     with patch("robothor.memory.generation.generate", new=gen):
