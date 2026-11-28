@@ -648,9 +648,89 @@ _PLUGIN_SCHEMAS: dict[str, dict[str, Any]] = {
     },
 }
 
+_REMOTE_TENANT = {
+    "type": "string",
+    "description": "The child tenant's id, as org_tools lists it.",
+}
+_REMOTE_TOOL = {"type": "string", "description": "The child tenant's tool, as org_tools names it."}
+_REMOTE_ARGS = {
+    "type": "object",
+    "description": "That tool's own arguments (org_tools with `tenant` and `tool` shows them).",
+}
+
+#: A child company's OWN tools, through the bridge (``handlers/org_remote.py``).
+#: They declare ``tenant`` themselves, so the engine's generic ``tenant``
+#: property is not stamped on them.
+_ORG_REMOTE_SCHEMAS: dict[str, dict[str, Any]] = {
+    "org_tools": {
+        "type": "function",
+        "function": {
+            "name": "org_tools",
+            "description": (
+                "The tools each child tenant's own connectors offer you: per tenant, its "
+                "plugins, its tools (name, read or write, short description) and their "
+                "health checks. `tenant`: that one only. `tenant` + `tool`: that tool's "
+                "parameters and notes. Read-only. Use it when the answer lives in a child's "
+                "system this tenant has no connector for; then org_tool_read."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"tenant": _REMOTE_TENANT, "tool": _REMOTE_TOOL},
+            },
+        },
+    },
+    "org_tool_read": {
+        "type": "function",
+        "function": {
+            "name": "org_tool_read",
+            "description": (
+                "Run one of a child tenant's read tools in that tenant (see org_tools) "
+                "and return its result. Read-only. For tools this tenant has itself, call "
+                "them directly; for CRM, task and run data in a child, pass `tenant` to "
+                "those tools instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tenant": _REMOTE_TENANT,
+                    "tool": _REMOTE_TOOL,
+                    "args": _REMOTE_ARGS,
+                },
+                "required": ["tenant", "tool"],
+            },
+        },
+    },
+    "org_tool_write": {
+        "type": "function",
+        "function": {
+            "name": "org_tool_write",
+            "description": (
+                "Run one of a child tenant's write tools in that tenant (see org_tools). "
+                "Changes that tenant's systems: only for the verified owner, in chat, "
+                "never on a scheduled run. `dry_run: true` returns what it would do without "
+                "doing it; preview first when unsure."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tenant": _REMOTE_TENANT,
+                    "tool": _REMOTE_TOOL,
+                    "args": _REMOTE_ARGS,
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "true: describe the change without making it.",
+                    },
+                },
+                "required": ["tenant", "tool"],
+            },
+        },
+    },
+}
+
 #: The organisation rollup (``handlers/org.py``). Its own block, outside
 #: ``get_engine_schemas``, for the size-ratchet reason above.
 _ORG_SCHEMAS: dict[str, dict[str, Any]] = {
+    **_ORG_REMOTE_SCHEMAS,
     "org_overview": {
         "type": "function",
         "function": {

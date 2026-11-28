@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   companyStatus,
+  connectionsByTenant,
+  countRemoteTools,
   failureReasonLabel,
   formatCost,
   formatRate,
   sortCompanies,
   statusLabel,
+  summariseChecks,
   type CompanyEntry,
+  type CompanyConnections,
 } from "../command-centre-format";
 
 function entry(tenant_id: string, status: string, extra: Partial<CompanyEntry> = {}): CompanyEntry {
@@ -90,5 +94,79 @@ describe("formatting", () => {
     expect(failureReasonLabel("rate_limit")).toBe("rate limit");
     expect(failureReasonLabel("budget_exhausted")).toBe("budget exhausted");
     expect(failureReasonLabel(undefined)).toBe("unknown");
+  });
+});
+
+describe("summariseChecks", () => {
+  it("counts checks by status and names the failing and warning ones", () => {
+    expect(
+      summariseChecks([
+        { name: "example-plugin.connection", status: "ok", detail: "" },
+        { name: "example-plugin.token", status: "fail", detail: "expired" },
+        { name: "other-plugin.connection", status: "warn", detail: "slow" },
+        { name: "other-plugin.webhook", status: "fail", detail: "" },
+        { name: "other-plugin.optional", status: "skip", detail: "" },
+      ]),
+    ).toEqual({
+      ok: 1,
+      warn: 1,
+      fail: 2,
+      skip: 1,
+      failing: ["example-plugin.token", "other-plugin.webhook"],
+      warning: ["other-plugin.connection"],
+    });
+  });
+
+  it("counts an unknown check status as a warning, never as ok", () => {
+    const summary = summariseChecks([{ name: "x.check", status: "weird", detail: "" }]);
+    expect(summary.ok).toBe(0);
+    expect(summary.warn).toBe(1);
+    expect(summary.warning).toEqual(["x.check"]);
+  });
+
+  it("is all zeros for no checks", () => {
+    expect(summariseChecks([])).toEqual({ ok: 0, warn: 0, fail: 0, skip: 0, failing: [], warning: [] });
+  });
+});
+
+describe("countRemoteTools", () => {
+  it("splits the remote tools into reads and writes", () => {
+    expect(
+      countRemoteTools([
+        { name: "a", plugin: "p", access: "read", attestations: [], description: "" },
+        { name: "b", plugin: "p", access: "read", attestations: [], description: "" },
+        { name: "c", plugin: "p", access: "write", attestations: ["baa"], description: "" },
+      ]),
+    ).toEqual({ read: 2, write: 1 });
+  });
+
+  it("is zero for none", () => {
+    expect(countRemoteTools([])).toEqual({ read: 0, write: 0 });
+  });
+});
+
+describe("connectionsByTenant", () => {
+  const entryFor = (tenant_id: string): CompanyConnections => ({
+    tenant_id,
+    display_name: tenant_id,
+    status: "ok",
+    error: null,
+    plugins: [],
+    tools: [],
+    checks: [],
+  });
+
+  it("indexes the entries by tenant id", () => {
+    const map = connectionsByTenant({
+      as_of: "",
+      home_tenant_id: "acme-parent",
+      tenants: [entryFor("acme-child-a"), entryFor("acme-child-b")],
+    });
+    expect(map.get("acme-child-a")?.tenant_id).toBe("acme-child-a");
+    expect(map.get("acme-parent")).toBeUndefined();
+  });
+
+  it("is empty when there is no answer", () => {
+    expect(connectionsByTenant(null).size).toBe(0);
   });
 });

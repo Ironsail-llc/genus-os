@@ -29,7 +29,9 @@ Two things are deliberately **not** shared between tenants, even parent and
 child: data (every tenant-scoped row is isolated by row-level security) and
 connectors (each tenant has its own vault rows and its own engine). A parent's
 agent can still read and act in a child, one audited call at a time, inside
-that child's scope (see [Agents in a parent tenant](#agents-in-a-parent-tenant)).
+that child's scope (see [Agents in a parent tenant](#agents-in-a-parent-tenant)),
+and can use a child's own connectors through the child's engine (see
+[Using a child's connectors](#using-a-childs-connectors)).
 
 ## Order of operations
 
@@ -138,6 +140,118 @@ Every tenant shares one vault master key. A credential the bridge stores while a
 - **Google Workspace** is not a vault row: it is a file secret mounted into one
   engine (`engine.googleWorkspace` in the chart). Give each tenant's engine its
   own secret. Two engines sharing one would read and send one mailbox for both.
+
+### Using a child's connectors
+
+A connector is never copied to the parent. Instead the parent's agent calls
+the child's tool where it lives: home engine → bridge (`POST
+/api/org/remote/call`) → the child's engine, which runs the tool with its own
+credentials, permissions and audit and returns the result. The child offers
+only the tools its plugins declare remote, each as a read or a write
+([Plugins](../PLUGINS.md)). The agent's tools are `org_tools`, `org_tool_read`
+and `org_tool_write` ([Tools](../TOOLS.md#a-child-companys-own-tools-org_tools-org_tool_read-org_tool_write));
+the Command centre's connections view (`GET /api/org/connections`) shows the
+same catalogue and each plugin's health to the parent's owner or admin.
+
+| Caller | Read a child's tool | Write through a child's tool |
+|-----|---------|---------|
+| The parent's verified `owner`, in chat | Yes | Yes |
+| The parent's verified `admin`, in chat | Yes | No |
+| An unattended run (cron and heartbeat, hook, event, workflow) | Only with both grants under [The unattended grant](#agents-in-a-parent-tenant) **and** the child granting its `parent_agent` role on that tool | Never |
+| A sub-agent, a benchmark run, a member, a viewer, a person signed in to a child | No | No |
+
+What has to be in place:
+
+1. The child's plugin declares the tool remote, and is enabled in the child.
+2. If the tool requires an attestation, the bridge's
+   `GENUS_ORG_REMOTE_ATTESTATIONS` lists it. The bridge presents its own
+   value; a request cannot claim one.
+3. Nothing, on a fresh install, at the bridge's capabilities manifest. The
+   engine's token for these routes carries the `org:remote` scope, which only
+   the remote tools mint, and the bridge authorises the routes by that scope.
+   An instance whose `agent_capabilities.json` **lists** the agent must also
+   list the two remote patterns for it (below).
+4. For unattended reads only: the child grants `parent_agent` on that tool.
+   The role has no permission rows by default, so it is denied everything
+   until granted.
+
+There is no mode or flag for remote tools: they are the only code path, and
+what a child offers is decided by its plugin's `remote` declaration (a tool
+not declared is never callable from a parent) and its own roles. To stop or
+narrow them without a release:
+
+- **Unattended reads:** delete the child's `parent_agent` allow rows
+  (`DELETE FROM role_permissions WHERE tenant_id = '<child>' AND role =
+  'parent_agent' AND access = 'allow'`, or one `tool_pattern`). The role falls
+  back to its deny-all.
+- **One tool, for everyone:** add a tenant-scoped deny row in the child for
+  the roles a parent's caller runs as (`owner`, `admin`, `parent_agent`) on
+  that tool ([Service roles](SERVICE_ROLES.md#roles-available)). A tenant row
+  is evaluated before the `__default__` rows, so the call is refused
+  (`remote_not_permitted`); it also binds the child's own people in those
+  roles.
+- **One connector:** disable the plugin in the child
+  (`genus plugin disable <name>`, or Settings › Plugins while acting in the
+  child), or use the plugin's own switch where it has one. Its tools leave
+  the child's catalogue.
+- **Every unattended read from a parent:** clear the parent's
+  `crm_tenants.child_data_access`
+  ([the unattended grant](#agents-in-a-parent-tenant)). People in chat are
+  unaffected; they are bounded by their own role in the parent.
+- **The feature itself:** `git revert` the change and roll out the release.
+
+A plugin author narrows what is exposed by changing the `remote` declaration
+([Plugins](../PLUGINS.md)); a write declared there can always be previewed
+with `org_tool_write`'s `dry_run: true`, which passes every check, is audited
+on both sides and executes nothing.
+
+**What this does not protect against.**
+
+- **Presence.** The bridge and the child check that the person a call names
+  is an owner (for a write) or owner or admin of the parent and may act in
+  the child. They cannot check that the person is there: "attended" is the
+  parent engine's word, carried in `requested_by`. A compromised parent engine
+  can name its owner on an unattended run.
+- **One signing key.** Every engine and the bridge share one signing key, so
+  an engine that is compromised can mint tokens the others accept. Remote
+  tools add no key separation between tenants.
+- **Steering through a result.** Text a child's read returns can try to talk
+  the same run into a write. The control is the untrusted-content boundary
+  (results of all three tools are wrapped as external content), the owner-only
+  rule for writes and the child's own roles, not a check on what the text
+  says.
+
+**An instance with its own capabilities manifest.** The bridge reads
+`agent_capabilities.json` from `ROBOTHOR_CAPABILITIES_MANIFEST`, else
+`<bridge workspace>/agent_capabilities.json`, else
+`<bridge workspace>/brain/agent_capabilities.json`. Nothing generates it from
+the agent manifests: the `bridge_endpoints` in the instance's `docs/agents/main.yaml` (and in
+the shipped template) record what the agent calls, but the bridge does not read
+them. It is one file for the whole deployment, keyed by agent id only, so an
+entry for `main` covers every tenant's `main`. If the file has an entry for the
+agent that makes remote calls (usually `main`), add the two patterns to that
+entry's `bridge_endpoints`:
+
+```json
+"main": {
+  "bridge_endpoints": [
+    "GET /api/org/remote/*",
+    "POST /api/org/remote/call"
+  ]
+}
+```
+
+keeping the entry's other patterns, then restart the bridge: it loads the file
+only when it starts. Until then every remote call from that agent is refused
+with a 403 that names the missing patterns, and `genus doctor --category
+capabilities` reports it (`capabilities.remote_tools`). For an installed
+instance `docs/agents/main.yaml`, add the same two lines under `bridge_endpoints:` so the
+manifest matches the template; it does not change what the bridge allows.
+
+Every call leaves a row on each side: `agent.cross_tenant_call` under the
+parent (with `details.remote_tool`), `org.remote_call` under the child from the
+bridge, and `agent.remote_tool_call` under the child from its engine, which
+carries a digest of the arguments, never the arguments.
 
 ## Plugins are per tenant
 
@@ -541,7 +655,9 @@ v2:
 
 Either one alone grants nothing. With both, the agent's unattended runs can use
 the allowlisted reads in every child, and of the writes only create a task or
-send a notification. The grant covers unattended runs only: the same agent
+send a notification. They may also read through a child's connectors where
+the child grants `parent_agent` on that tool, and never write through them
+([Using a child's connectors](#using-a-childs-connectors)). The grant covers unattended runs only: the same agent
 answering a person on chat reaches the children only when that person is a
 verified `owner` or `admin` of the parent. Revoke by setting either back to false; the next run picks
 it up.

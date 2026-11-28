@@ -106,3 +106,83 @@ export function formatCost(usd: number | null | undefined): string {
 export function failureReasonLabel(errorType: string | null | undefined): string {
   return errorType ? errorType.replace(/_/g, " ") : "unknown";
 }
+
+/**
+ * What each child company has connected (`GET /api/org/connections`): its
+ * plugins, their connection checks, and the tools it lets a parent's agent use.
+ * The bridge asks each company's engine; one that does not answer is an entry
+ * with `status: "error"` and nothing else.
+ */
+export interface ConnectionPlugin {
+  name: string;
+  version: string;
+  enabled: boolean;
+}
+
+export interface RemoteTool {
+  name: string;
+  plugin: string;
+  access: "read" | "write" | string;
+  attestations: string[];
+  description: string;
+}
+
+export interface ConnectionCheck {
+  name: string;
+  status: "ok" | "warn" | "fail" | "skip" | string;
+  detail: string;
+}
+
+export interface CompanyConnections {
+  tenant_id: string;
+  display_name: string;
+  status: "ok" | "error" | string;
+  error: string | null;
+  plugins: ConnectionPlugin[];
+  tools: RemoteTool[];
+  checks: ConnectionCheck[];
+}
+
+export interface OrgConnections {
+  as_of: string;
+  home_tenant_id?: string;
+  tenants: CompanyConnections[];
+}
+
+export interface CheckSummary {
+  ok: number;
+  warn: number;
+  fail: number;
+  skip: number;
+  /** Names of the failing checks, in the order given. */
+  failing: string[];
+  /** Names of the checks that warn (or report a status this page does not know). */
+  warning: string[];
+}
+
+/** Checks counted by status. A status this page does not know counts as a warning. */
+export function summariseChecks(checks: readonly ConnectionCheck[]): CheckSummary {
+  const summary: CheckSummary = { ok: 0, warn: 0, fail: 0, skip: 0, failing: [], warning: [] };
+  for (const check of checks) {
+    if (check.status === "ok") summary.ok += 1;
+    else if (check.status === "skip") summary.skip += 1;
+    else if (check.status === "fail") {
+      summary.fail += 1;
+      summary.failing.push(check.name);
+    } else {
+      summary.warn += 1;
+      summary.warning.push(check.name);
+    }
+  }
+  return summary;
+}
+
+/** Remote tools split into reads and writes; anything not a read counts as a write. */
+export function countRemoteTools(tools: readonly RemoteTool[]): { read: number; write: number } {
+  const read = tools.filter((t) => t.access === "read").length;
+  return { read, write: tools.length - read };
+}
+
+export function connectionsByTenant(reply: OrgConnections | null | undefined): Map<string, CompanyConnections> {
+  return new Map((reply?.tenants ?? []).map((t) => [t.tenant_id, t]));
+}

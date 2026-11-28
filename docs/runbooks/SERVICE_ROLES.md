@@ -121,6 +121,24 @@ Seeded by migration 107 and visible in `role_permissions`:
 | `guest` | `*` deny |
 | `federation_parent` | `get_*`, `list_*`, `search_*`; `*` deny |
 | `federation_child` | `*` deny |
+| `parent_agent` | `*` deny (migration 184); a tenant opens one tool at a time |
+
+`parent_agent` is the role a parent tenant's agent runs as when it reads in
+this tenant through a remote tool with no person asking (an unattended run).
+It is used for nothing else, and only when the parent set
+`crm_tenants.child_data_access`. Its default is deny-all; a tenant grants it
+one tool at a time with a tenant-scoped row, which is evaluated before the
+`__default__` deny:
+
+```sql
+INSERT INTO role_permissions (tenant_id, role, tool_pattern, access)
+VALUES ('<this tenant>', 'parent_agent', '<tool>', 'allow')
+ON CONFLICT (tenant_id, role, tool_pattern) DO UPDATE SET access = EXCLUDED.access;
+```
+
+A call from a person in the parent runs with that person's role there
+(`owner` or `admin`) and their user id instead, never as `parent_agent`. See
+[Plugins](../PLUGINS.md#a-tool-a-parent-tenant-may-run-here).
 
 Per-agent exceptions go in `user_permissions` keyed on the run's `user_id`
 (`service:<agent-id>` for system triggers). A `user_permissions` row beats the

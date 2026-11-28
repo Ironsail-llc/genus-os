@@ -129,6 +129,18 @@ Renders:
 {{- $_ := set $serviceEnv "GENUS_TENANT_SWITCH_ALLOW_INERT_RLS" (toString $tenancy.allowInertRls) -}}
 {{- end -}}
 {{- end -}}
+{{- /* Remote tools: the bridge forwards a parent agent's call and the
+       target engine admits it, so the attestation list reaches the bridge
+       and every engine alike. The bridge's own attestations are the ones
+       presented to a target. */ -}}
+{{- with $tenancy.remoteAttestations -}}
+{{- range . -}}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,31}$" (toString .)) -}}
+{{- fail (printf "tenancy.remoteAttestations entries must be lowercase tokens (a letter, then letters, digits or _; at most 32), got %q" (toString .)) -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $serviceEnv "GENUS_ORG_REMOTE_ATTESTATIONS" (join "," .) -}}
+{{- end -}}
 {{- end -}}
 {{- if $isHooks -}}
 {{- $_ := set $serviceEnv "ROBOTHOR_HOOKS_HOST" "0.0.0.0" -}}

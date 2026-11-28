@@ -13,7 +13,10 @@ from silently reopening the legacy trusted-header path.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _PRODUCTION_ENVIRONMENTS = frozenset({"prod", "production"})
@@ -108,6 +111,31 @@ def tenant_switch_mode() -> str:
 
     mode = str(get_settings().auth.tenant_switch_mode or "").strip().lower()
     return mode if mode in TENANT_SWITCH_MODES else "off"
+
+
+def org_remote_attestations() -> frozenset[str]:
+    """The attestation tokens this deployment presents on remote calls.
+
+    ``GENUS_ORG_REMOTE_ATTESTATIONS`` as a comma list; blanks and duplicates
+    collapse, and a token that is not ``^[a-z][a-z0-9_]{0,31}$`` is dropped
+    and logged rather than presented.
+    """
+    from robothor.settings import get_settings
+    from robothor.tenancy.remote_contract import ATTESTATION_TOKEN_RE
+
+    tokens: set[str] = set()
+    for part in str(get_settings().auth.org_remote_attestations or "").split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if ATTESTATION_TOKEN_RE.fullmatch(token):
+            tokens.add(token)
+        else:
+            logger.warning(
+                "GENUS_ORG_REMOTE_ATTESTATIONS: dropping malformed token %r.",
+                token,
+            )
+    return frozenset(tokens)
 
 
 def legacy_headers_allowed(*, bind_host: str = "127.0.0.1") -> bool:

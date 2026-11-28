@@ -626,6 +626,18 @@ TOOL_HINTS: dict[str, ToolHint] = {
         ),
         rank_bias=1.0,
     ),
+    # A child company's OWN tools (its connectors), through the bridge. The
+    # words are the ones an agent uses when the parent lacks a connector the
+    # child has: "connector", "integration", "plugin", "remote".
+    "org_tools": ToolHint(
+        keywords=("tenant", "child", "connector", "integration", "plugin", "remote", "catalogue"),
+    ),
+    "org_tool_read": ToolHint(
+        keywords=("tenant", "child", "connector", "integration", "remote", "read"),
+    ),
+    "org_tool_write": ToolHint(
+        keywords=("tenant", "child", "connector", "integration", "remote", "write", "change"),
+    ),
 }
 
 

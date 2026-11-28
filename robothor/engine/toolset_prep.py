@@ -326,6 +326,7 @@ async def prepare_toolset(
     tenant_id: str | None = None,
     actor_id: str | None = None,
     capability: Any = None,
+    accessible_tenant_ids: tuple[str, ...] | None = None,
 ) -> PreparedToolset:
     """Load this agent's adapters, then pick and wrap its toolset.
 
@@ -337,6 +338,12 @@ async def prepare_toolset(
     ``capability`` is the run's ``TierDecision`` (None outside a run). Its
     tier picks the toolset; a widening tier also reports which opt-in tools
     it added.
+
+    ``accessible_tenant_ids`` is the run's reach. Only a run that reaches a
+    tenant other than its own is offered the remote tools (``org_tools``,
+    ``org_tool_read``, ``org_tool_write``) up front; any other run pays
+    nothing for them and still finds them through tool search. No lookup:
+    the reach was resolved when the run was attributed.
     """
     await _load_adapters(registry, agent_config, agent_id)
 
@@ -352,8 +359,11 @@ async def prepare_toolset(
             from robothor.engine import recent_tools
 
             recent = await recent_tools.recent_tool_names(agent_id, tenant_id or DEFAULT_TENANT)
+            # Passed only when non-empty, as `tier` is: a registry without the
+            # keyword is called exactly as before.
+            eager_kw = _remote_eager(tenant_id, accessible_tenant_ids)
             schemas = registry.build_for_agent(
-                agent_config, autonomy=autonomy, recent=recent, **tier_kw
+                agent_config, autonomy=autonomy, recent=recent, **tier_kw, **eager_kw
             )
         else:
             schemas = registry.build_for_agent(agent_config, autonomy=autonomy, **tier_kw)
@@ -394,6 +404,18 @@ async def prepare_toolset(
         wrapped = preamble + system_prompt + PLAN_MODE_SUFFIX
 
     return PreparedToolset(tool_schemas=tool_schemas, tool_names=tool_names, system_prompt=wrapped)
+
+
+def _remote_eager(
+    tenant_id: str | None, accessible_tenant_ids: tuple[str, ...] | None
+) -> dict[str, frozenset[str]]:
+    """``{"eager": the remote tools}`` for a run that reaches another tenant, else ``{}``."""
+    from robothor.engine.tools.constants import ORG_REMOTE_TOOL_NAMES
+
+    own = tenant_id or DEFAULT_TENANT
+    if any(t and t != own for t in accessible_tenant_ids or ()):
+        return {"eager": ORG_REMOTE_TOOL_NAMES}
+    return {}
 
 
 def _defers(registry: Any, agent_config: Any, **tier_kw: str) -> bool:

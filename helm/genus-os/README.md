@@ -309,6 +309,24 @@ switching work while row-level security is inert, which leaves each query's
 own `WHERE` clause as the only tenant boundary. Turn it on deliberately, if at
 all.
 
+**Remote tools.** A parent tenant's agent can use the tools a child company's
+plugins declare remote: the bridge forwards each call and the child's engine
+admits it. There is no mode to set; what a child offers is its plugins'
+`remote` declarations, its per-tool grants and its roles. One attestation list
+is read by the bridge and every engine, so the chart renders it on the bridge,
+the root engine and every cell, beside the switch mode. A component's own
+`env`, or a cell's `env`, still wins.
+
+| Value | Renders | Default |
+|-------|---------|---------|
+| `tenancy.remoteAttestations` | `GENUS_ORG_REMOTE_ATTESTATIONS`, the list comma-joined | `[]`, which renders nothing (no attestations) |
+
+Attestations are lowercase tokens (a letter, then letters, digits or `_`, at
+most 32 characters) naming what this deployment attests for the parent side,
+such as a signed agreement a child company's tool requires; any other entry
+fails at template time. The bridge's own list is the one presented to the
+child.
+
 **Shared vault key.** Credentials in the vault are encrypted with one master
 key, and a credential the bridge stores while acting in a child tenant is read
 back by that child's engine. So the bridge, the root engine and every cell

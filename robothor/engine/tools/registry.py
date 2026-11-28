@@ -880,6 +880,7 @@ class ToolRegistry:
         autonomy: bool = False,
         recent: frozenset[str] = frozenset(),
         tier: str = "",
+        eager: frozenset[str] = frozenset(),
     ) -> list[dict[str, Any]]:
         """Return filtered tool schemas for an agent based on allow/deny lists.
 
@@ -902,15 +903,23 @@ class ToolRegistry:
 
         ``tier`` is the run's capability tier (``capability_tier``);
         see :meth:`get_tool_names`.
+
+        ``eager`` adds this run's own up-front tools to the manifest's
+        ``tools_eager`` (the remote tools, for a run that reaches another
+        tenant). Like ``recent``, it never widens reach.
         """
         self._refresh_plugin_schemas_if_stale()
         names = self._get_filtered_names(config, tier)
         if self.should_defer(config, tier=tier):
             seen: set[str] = set()
             advertised: list[str] = []
-            eager = set(getattr(config, "tools_eager", None) or ()) | _room_run_tools(config.id)
+            up_front = (
+                set(getattr(config, "tools_eager", None) or ())
+                | _room_run_tools(config.id)
+                | set(eager)
+            )
             for n in [*names, *sorted(TOOLSEARCH_TOOLS)]:
-                in_core = n in CORE_TOOLS or n in TOOLSEARCH_TOOLS or n in recent or n in eager
+                in_core = n in CORE_TOOLS or n in TOOLSEARCH_TOOLS or n in recent or n in up_front
                 if in_core and n in self._schemas and n not in seen:
                     seen.add(n)
                     advertised.append(n)

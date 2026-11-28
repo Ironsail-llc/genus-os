@@ -1,0 +1,161 @@
+"""Shared names for remote tools: a parent tenant's agent running a descendant's tool.
+
+The home engine, the bridge and the target engine all import these rather than
+retyping strings, so a refusal code or a limit cannot drift between the hops.
+Pure: no settings, no database, nothing heavier than the standard library.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from typing import Any
+
+# ── Access, outcomes ─────────────────────────────────────────────────────────
+
+ACCESS_READ = "read"
+ACCESS_WRITE = "write"
+ACCESS_VALUES: frozenset[str] = frozenset({ACCESS_READ, ACCESS_WRITE})
+
+OUTCOME_OK = "ok"
+OUTCOME_ERROR = "error"
+OUTCOME_DRY_RUN = "dry_run"
+OUTCOME_REPLAYED = "replayed"
+OUTCOMES: frozenset[str] = frozenset({OUTCOME_OK, OUTCOME_ERROR, OUTCOME_DRY_RUN, OUTCOME_REPLAYED})
+
+#: ``details.outcome`` of a home audit row for a write the effect ledger held
+#: (an earlier one to the same target is uncertain); the row's status is ``denied``.
+OUTCOME_HELD_UNCERTAIN = "held_uncertain"
+
+# ── Refusal codes ────────────────────────────────────────────────────────────
+
+ERR_WRITE_FORBIDDEN = "remote_write_forbidden"
+ERR_TOOL_UNKNOWN = "remote_tool_unknown"
+ERR_ACCESS_MISMATCH = "remote_access_mismatch"
+ERR_CALLER_FORBIDDEN = "remote_caller_forbidden"
+ERR_NOT_PERMITTED = "remote_not_permitted"
+ERR_ATTESTATION_MISSING = "remote_attestation_missing"
+ERR_BAD_ARGUMENTS = "remote_bad_arguments"
+ERR_OUTCOME_UNKNOWN = "remote_outcome_unknown"
+#: A replayed request id whose tool or arguments differ from the call that claimed it.
+ERR_REQUEST_MISMATCH = "remote_request_mismatch"
+#: The bridge could not check or route the call; nothing was forwarded.
+ERR_UNAVAILABLE = "remote_unavailable"
+ERR_TOO_LARGE = "remote_too_large"
+ERR_TIMEOUT = "remote_timeout"
+
+ERROR_CODES: frozenset[str] = frozenset(
+    {
+        ERR_WRITE_FORBIDDEN,
+        ERR_TOOL_UNKNOWN,
+        ERR_ACCESS_MISMATCH,
+        ERR_CALLER_FORBIDDEN,
+        ERR_NOT_PERMITTED,
+        ERR_ATTESTATION_MISSING,
+        ERR_BAD_ARGUMENTS,
+        ERR_OUTCOME_UNKNOWN,
+        ERR_REQUEST_MISMATCH,
+        ERR_UNAVAILABLE,
+        ERR_TOO_LARGE,
+        ERR_TIMEOUT,
+    }
+)
+
+#: The refusals a target (or the bridge) gives BEFORE anything runs, by the
+#: HTTP status each comes with. For a write, any other answer -- a 5xx, an
+#: unreadable body, an unexpected status, code or shape -- may follow a write
+#: that acted, so it is an unknown outcome, never a plain error.
+CLEAN_REFUSALS: dict[int, frozenset[str]] = {
+    403: frozenset(
+        {ERR_WRITE_FORBIDDEN, ERR_NOT_PERMITTED, ERR_CALLER_FORBIDDEN, ERR_ATTESTATION_MISSING}
+    ),
+    404: frozenset({ERR_TOOL_UNKNOWN, ERR_NOT_PERMITTED}),
+    409: frozenset({ERR_ACCESS_MISMATCH, ERR_REQUEST_MISMATCH}),
+    422: frozenset({ERR_BAD_ARGUMENTS}),
+    503: frozenset({ERR_UNAVAILABLE}),
+}
+
+
+def is_clean_refusal(status: int, body: Any) -> bool:
+    """Whether ``(status, body)`` is a refusal given before anything ran."""
+    code = body.get("error") if isinstance(body, dict) else None
+    return isinstance(code, str) and code in CLEAN_REFUSALS.get(status, frozenset())
+
+
+def is_known_answer(body: Any) -> bool:
+    """Whether a 200 body is one of the answers the target gives."""
+    return isinstance(body, dict) and body.get("outcome") in OUTCOMES
+
+
+#: ``audit_log.status`` for a remote-tools row: one short word (the column is
+#: ``varchar(20)``). The specific code goes in ``details.outcome``. ``replay``
+#: is the home engine's word for an answer from its own effect ledger.
+AUDIT_STATUSES: frozenset[str] = frozenset(
+    {"ok", "error", "denied", "dry_run", "replayed", "replay", "unknown"}
+)
+
+
+def audit_status(outcome: str, access: str) -> str:
+    """The audit row's status for a target-side ``outcome`` (code or answer)."""
+    if outcome in OUTCOMES:
+        return outcome
+    if outcome == ERR_OUTCOME_UNKNOWN:
+        return "unknown"
+    if outcome in (ERR_TIMEOUT, "internal_error"):
+        # A write cut short may have acted; a read only failed.
+        return "unknown" if access == ACCESS_WRITE else "error"
+    return "denied"
+
+
+# ── Names ────────────────────────────────────────────────────────────────────
+
+#: Audit event written under the TARGET tenant for every remote call.
+EVENT_REMOTE_TOOL_CALL = "agent.remote_tool_call"
+#: Role a target tenant grants, per tool, for person-less reads from its parent.
+ROLE_PARENT_AGENT = "parent_agent"
+#: Service-token scope an engine needs to call the bridge's remote routes.
+SCOPE_ORG_REMOTE = "org:remote"
+#: The only service id a target engine accepts remote calls from.
+BRIDGE_SERVICE_ID = "genus-bridge"
+
+#: The bridge routes a remote call uses, as ``bridge_endpoints`` patterns, each
+#: with one request it must match. An agent the bridge's capabilities manifest
+#: LISTS needs both; an unlisted one is authorised by :data:`SCOPE_ORG_REMOTE`.
+ORG_REMOTE_ENDPOINT_SAMPLES: tuple[tuple[str, str, str], ...] = (
+    ("GET /api/org/remote/*", "GET", "/api/org/remote/catalogue"),
+    ("POST /api/org/remote/call", "POST", "/api/org/remote/call"),
+)
+ORG_REMOTE_ENDPOINTS: tuple[str, ...] = tuple(p for p, _, _ in ORG_REMOTE_ENDPOINT_SAMPLES)
+
+#: A plugin's attestation token (and a deployment's attested one).
+ATTESTATION_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+
+# ── Limits ───────────────────────────────────────────────────────────────────
+
+REMOTE_RESULT_MAX_BYTES = 262144  # a larger result is refused (a read) or withheld (a write)
+
+#: ``result_withheld.reason`` on a write that ran but whose result is over the cap.
+WITHHELD_TOO_LARGE = "too_large"
+TARGET_TIMEOUT_S = 150  # the target engine's own execution budget
+BRIDGE_TIMEOUT_S = 165  # bridge -> target
+HOME_TIMEOUT_S = 180  # home engine -> bridge
+CHECK_CACHE_TTL_S = 60  # catalogue doctor-check cache
+CONNECTIONS_TIMEOUT_S = 10  # the connections page's wait for each company's catalogue
+CHECKS_BUDGET_S = 8  # the catalogue's plugin checks, inside CONNECTIONS_TIMEOUT_S
+DESCRIPTION_MAX_CHARS = 200  # catalogue description trim
+NOTES_MAX_CHARS = 600  # a declaration's notes
+
+
+def args_digest(args: Any) -> str:
+    """sha256 hex of the arguments as canonical JSON (sorted keys, no whitespace).
+
+    Audit rows carry this instead of the arguments. ``None`` digests as ``{}``.
+    """
+    canonical = json.dumps(
+        {} if args is None else args,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

@@ -119,7 +119,39 @@ def spec(tool_name: str) -> EffectSpec | None:
     return plugin_specs().get(tool_name)
 
 
+#: Built-in writes whose target is derived by core, not declared by a plugin.
+#: ``org_tool_write`` acts on one tool in one child company with one set of
+#: arguments; the arguments are kept as a digest only (they may name anyone).
+_CORE_TARGET_KEYS: dict[str, tuple[str, ...]] = {
+    "org_tool_write": ("tenant", "tool", "args_digest"),
+}
+
+#: The part of a core target the fence compares. For ``org_tool_write`` that
+#: is the child and its tool, never the arguments: a reworded retry (an added
+#: blank field, "10" for 10) carries a new request id the child would run
+#: again, so it must wait like the call it repeats. The digest is kept in the
+#: stored target only, to name the uncertain call.
+_CORE_FENCE_KEYS: dict[str, tuple[str, ...]] = {
+    "org_tool_write": ("tenant", "tool"),
+}
+
+
+def _core_target(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    from robothor.tenancy.remote_contract import args_digest
+
+    inner = arguments.get("args")
+    tenant = arguments.get("tenant")
+    return {
+        # As the handler reads it (cross_tenant._tenant_target strips it).
+        "tenant": tenant.strip() if isinstance(tenant, str) else tenant,
+        "tool": arguments.get("tool"),
+        "args_digest": args_digest(inner if isinstance(inner, dict) else {}),
+    }
+
+
 def declared_target(tool_name: str) -> tuple[str, ...] | None:
+    if tool_name in _CORE_TARGET_KEYS:
+        return _CORE_TARGET_KEYS[tool_name]
     declared = spec(tool_name)
     return declared.target if declared is not None and declared.target else None
 
@@ -133,6 +165,8 @@ def target_of(tool_name: str, arguments: Any) -> dict[str, Any]:
     """
     if not isinstance(arguments, dict):
         return {}
+    if tool_name in _CORE_TARGET_KEYS:
+        return _core_target(tool_name, arguments)
     keys = declared_target(tool_name)
     if keys:
         return {key: arguments.get(key) for key in keys}
@@ -147,6 +181,8 @@ def target_key(tool_name: str, target: dict[str, Any]) -> str | None:
     """The hash the fence compares; None (fence the whole tool) without a declared target."""
     if not declared_target(tool_name):
         return None
+    if tool_name in _CORE_FENCE_KEYS:
+        target = {key: target.get(key) for key in _CORE_FENCE_KEYS[tool_name]}
     payload = json.dumps([tool_name, target], sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -176,6 +212,8 @@ def short(value: Any) -> Any:
 def fences_whole_tool(tool_name: str) -> bool:
     """Whether every later call of the tool waits on an uncertain one: unless it
     declares a target and has not asked for the whole-tool scope."""
+    if tool_name in _CORE_TARGET_KEYS:
+        return False
     declared = spec(tool_name)
     return declared is None or not declared.target or declared.fence == "tool"
 

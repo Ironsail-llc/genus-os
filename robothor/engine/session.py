@@ -206,6 +206,11 @@ EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
         "datadog_trace_get",
         "datadog_monitors_list",
         "datadog_metrics_query",
+        # A child company's own tools, through the bridge: their catalogue
+        # text and results come from that company's plugins and systems.
+        "org_tools",
+        "org_tool_read",
+        "org_tool_write",
     }
 )
 

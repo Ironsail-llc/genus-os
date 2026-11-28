@@ -112,6 +112,47 @@ function routeFetch(routes: Record<string, () => Response>) {
 }
 
 const OVERVIEW_URL = "/api/bridge/api/org/overview";
+const CONNECTIONS_URL = "/api/bridge/api/org/connections";
+
+const CONNECTIONS_A = {
+  tenant_id: "acme-child-a",
+  display_name: "Acme Child A",
+  status: "ok",
+  error: null,
+  plugins: [
+    { name: "example-plugin", version: "1.2.3", enabled: true },
+    { name: "other-plugin", version: "0.4.0", enabled: true },
+  ],
+  tools: [
+    { name: "example_read", plugin: "example-plugin", access: "read", attestations: [], description: "Reads." },
+    { name: "example_list", plugin: "example-plugin", access: "read", attestations: [], description: "Lists." },
+    { name: "example_write", plugin: "example-plugin", access: "write", attestations: ["baa"], description: "Writes." },
+  ],
+  checks: [
+    { name: "example-plugin.connection", status: "ok", detail: "" },
+    { name: "other-plugin.connection", status: "warn", detail: "slow" },
+    { name: "other-plugin.token", status: "fail", detail: "expired" },
+  ],
+};
+
+const CONNECTIONS_B_ERROR = {
+  tenant_id: "acme-child-b",
+  display_name: "Acme Child B",
+  status: "error",
+  error: "the company's engine did not answer",
+  plugins: [],
+  tools: [],
+  checks: [],
+};
+
+function connections(tenants: unknown[], extra: Record<string, unknown> = {}) {
+  return {
+    as_of: "2026-11-18T12:00:00+00:00",
+    home_tenant_id: "acme-parent",
+    tenants,
+    ...extra,
+  };
+}
 
 describe("CommandCentreView", () => {
   it("shows one card per company, with the companies needing attention first", async () => {
@@ -375,6 +416,153 @@ describe("CommandCentreView", () => {
       });
       await waitFor(() => expect(refresh.hasAttribute("disabled")).toBe(false));
       expect(refresh.getAttribute("aria-busy")).toBe("false");
+    });
+  });
+
+  describe("the Connected block", () => {
+    it("shows each company's plugins, checks and remote tools", async () => {
+      routeFetch({
+        [OVERVIEW_URL]: () => jsonResponse(overview([PARENT, CHILD_A])),
+        [CONNECTIONS_URL]: () => jsonResponse(connections([CONNECTIONS_A])),
+      });
+
+      render(<CommandCentreView visible />);
+
+      const card = await screen.findByTestId("company-card-acme-child-a");
+      const block = await within(card).findByTestId("connected");
+      expect(within(block).getByRole("heading", { name: "Connected" })).toBeTruthy();
+      const plugins = within(block).getByTestId("connected-plugins").textContent ?? "";
+      expect(plugins).toMatch(/example-plugin.*1\.2\.3/);
+      expect(plugins).toMatch(/other-plugin.*0\.4\.0/);
+      expect(within(block).getByTestId("connected-checks").textContent).toMatch(/1 ok.*1 warn.*1 fail/);
+      expect(within(block).getByTestId("connected-failing").textContent).toContain("other-plugin.token");
+      expect(within(block).getByTestId("connected-tools").textContent).toMatch(/2 read.*1 write/);
+      // The card's own figures are still there.
+      expect(within(card).getByTestId("runs-24h").textContent).toContain("10");
+    });
+
+    it("says quietly that a company's connections could not be read", async () => {
+      routeFetch({
+        [OVERVIEW_URL]: () => jsonResponse(overview([PARENT, CHILD_A, CHILD_B_ERROR])),
+        [CONNECTIONS_URL]: () => jsonResponse(connections([CONNECTIONS_A, CONNECTIONS_B_ERROR])),
+      });
+
+      render(<CommandCentreView visible />);
+
+      const card = await screen.findByTestId("company-card-acme-child-b");
+      const block = await within(card).findByTestId("connected");
+      expect(within(block).getByTestId("connected-error").textContent).toMatch(/could not be read/);
+      expect(within(block).queryByTestId("connected-plugins")).toBeNull();
+      expect(within(block).queryByRole("alert")).toBeNull();
+      // The other company's block is unaffected.
+      expect(within(screen.getByTestId("company-card-acme-child-a")).getByTestId("connected-plugins")).toBeTruthy();
+    });
+
+    it("says so when a company has no plugins", async () => {
+      routeFetch({
+        [OVERVIEW_URL]: () => jsonResponse(overview([PARENT, CHILD_A])),
+        [CONNECTIONS_URL]: () =>
+          jsonResponse(connections([{ ...CONNECTIONS_A, plugins: [], tools: [], checks: [] }])),
+      });
+
+      render(<CommandCentreView visible />);
+
+      const card = await screen.findByTestId("company-card-acme-child-a");
+      const block = await within(card).findByTestId("connected");
+      expect(within(block).getByTestId("connected-plugins").textContent).toContain("No plugins");
+      expect(within(block).getByTestId("connected-tools").textContent).toMatch(/none/i);
+      expect(within(block).queryByTestId("connected-failing")).toBeNull();
+    });
+
+    it("shows no block on a company the answer does not list (the home company)", async () => {
+      routeFetch({
+        [OVERVIEW_URL]: () => jsonResponse(overview([PARENT, CHILD_A])),
+        [CONNECTIONS_URL]: () => jsonResponse(connections([CONNECTIONS_A])),
+      });
+
+      render(<CommandCentreView visible />);
+
+      await within(await screen.findByTestId("company-card-acme-child-a")).findByTestId("connected");
+      expect(within(screen.getByTestId("company-card-acme-parent")).queryByTestId("connected")).toBeNull();
+    });
+
+    it.each([
+      ["refused (an older bridge, 404)", () => jsonResponse({ detail: "Not Found" }, 404)],
+      ["forbidden (403)", () => jsonResponse({ detail: "no" }, 403)],
+      ["a server error", () => jsonResponse({ detail: "boom" }, 500)],
+    ])("leaves the cards exactly as they are when the connections are %s", async (_name, reply) => {
+      routeFetch({ [OVERVIEW_URL]: () => jsonResponse(overview([PARENT, CHILD_A])), [CONNECTIONS_URL]: reply });
+
+      render(<CommandCentreView visible />);
+
+      const card = await screen.findByTestId("company-card-acme-child-a");
+      expect(within(card).getByTestId("runs-24h")).toBeTruthy();
+      expect(screen.queryByTestId("connected")).toBeNull();
+      expect(screen.queryByTestId("org-error")).toBeNull();
+    });
+
+    it("leaves the cards as they are when the connections request cannot reach the bridge", async () => {
+      vi.spyOn(global, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.endsWith(OVERVIEW_URL)) return jsonResponse(overview([PARENT, CHILD_A]));
+        throw new TypeError("network");
+      });
+
+      render(<CommandCentreView visible />);
+
+      expect(await screen.findByTestId("company-card-acme-child-a")).toBeTruthy();
+      expect(screen.queryByTestId("connected")).toBeNull();
+      expect(screen.queryByTestId("org-error")).toBeNull();
+    });
+
+    it("renders the cards once, with their blocks, rather than growing them after", async () => {
+      let release: (r: Response) => void = () => {};
+      vi.spyOn(global, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.endsWith(OVERVIEW_URL)) return jsonResponse(overview([PARENT, CHILD_A]));
+        if (url.endsWith(CONNECTIONS_URL)) {
+          return new Promise<Response>((resolve) => {
+            release = resolve;
+          });
+        }
+        return jsonResponse({ error: "unexpected" }, 500);
+      });
+
+      render(<CommandCentreView visible />);
+
+      // The overview is in, the connections are not: still loading, no card yet.
+      await waitFor(() => expect(screen.getByTestId("org-loading")).toBeTruthy());
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+      });
+      expect(screen.queryByTestId("company-card-acme-child-a")).toBeNull();
+
+      await act(async () => {
+        release(jsonResponse(connections([CONNECTIONS_A])));
+      });
+      const card = await screen.findByTestId("company-card-acme-child-a");
+      expect(within(card).getByTestId("connected")).toBeTruthy();
+    });
+
+    it("reads the connections again on Refresh, and not on tab focus", async () => {
+      const spy = routeFetch({
+        [OVERVIEW_URL]: () => jsonResponse(overview([PARENT, CHILD_A])),
+        [CONNECTIONS_URL]: () => jsonResponse(connections([CONNECTIONS_A])),
+      });
+      const reads = () => spy.mock.calls.filter(([url]) => String(url).endsWith(CONNECTIONS_URL)).length;
+
+      render(<CommandCentreView visible />);
+      await within(await screen.findByTestId("company-card-acme-child-a")).findByTestId("connected");
+      expect(reads()).toBe(1);
+
+      await act(async () => {
+        hide(true);
+        hide(false);
+      });
+      expect(reads()).toBe(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await waitFor(() => expect(reads()).toBe(2));
     });
   });
 });

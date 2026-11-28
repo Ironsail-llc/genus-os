@@ -155,3 +155,95 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content: {name: GENUS_TENANT_SWITCH_ALLOW_INERT_RLS, value: "false"}
+
+  # ─── Remote tools: a parent's agent calling a child company's tools ────────
+  # The bridge forwards each call and every engine admits it, so one
+  # attestation list reaches all of them, beside the switch mode.
+  - it: renders no attestations by default on the root engine
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS}
+          any: true
+
+  - it: renders no attestations by default on the bridge
+    template: bridge/workload.yaml
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS}
+          any: true
+
+  - it: every tenant cell reads the attestations
+    template: engine/tenants.yaml
+    set:
+      tenancy.remoteAttestations: [baa, soc2]
+      tenants:
+        - id: acme-child-a
+        - id: acme-child-b
+    documentSelector:
+      path: kind
+      value: Deployment
+      matchMany: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS, value: "baa,soc2"}
+
+  - it: the bridge gets the attestations comma-joined
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.remoteAttestations: [baa, soc2]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS, value: "baa,soc2"}
+
+  - it: the root engine gets the attestations comma-joined
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.remoteAttestations: [baa]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS, value: baa}
+
+  - it: the orchestrator never gets the attestations
+    template: orchestrator/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.remoteAttestations: [baa]
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS}
+          any: true
+
+  - it: a cell's own env still wins over the attestations
+    template: engine/tenants.yaml
+    set:
+      tenancy.remoteAttestations: [baa]
+      tenants:
+        - id: acme-child-a
+          env:
+            GENUS_ORG_REMOTE_ATTESTATIONS: soc2
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS, value: soc2}
+
+  - it: rejects an attestation that is not a lowercase token
+    template: engine/workload.yaml
+    set:
+      tenancy.remoteAttestations: [BAA]
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenancy.remoteAttestations"

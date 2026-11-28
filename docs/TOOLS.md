@@ -39,6 +39,10 @@ The core is three things, all cut to what the agent is allowed:
   and `gws_gmail_get` eager. Measured on a live instance before that list, "the
   five most urgent open tasks" went tool_search, tool_search, tool_describe,
   tool_call on every run: 4 to 9 model calls instead of 2.
+* for a run that reaches another tenant (an owner or admin of a parent, or an
+  unattended run with the parent's grant), the remote tools `org_tools`,
+  `org_tool_read` and `org_tool_write`. Any other run is not shown them and
+  finds them through `tool_search`.
 
 On a stock checkout an agent with no `tools_allowed` (so every registered tool)
 is shown 30 schemas instead of 206: about 6,600 estimated schema tokens per call
@@ -1973,6 +1977,100 @@ heartbeat or schedule, to brief the owner when something changed: called from
 chat it records nothing and only repeats what the next beat will report. Use `dry_run` before any
 write in another tenant, and show the operator what it would change.
 
+### A child company's own tools: `org_tools`, `org_tool_read`, `org_tool_write`
+
+A run is shown these three up front only when it reaches another tenant, and
+its ORGANISATION block names them; any other run finds them through
+`tool_search`, so an instance with no child tenants pays nothing for them.
+
+Connectors (plugins) are installed per company: a child tenant's plugins run
+in the child's engine and are not in the parent's. These three tools let a
+parent's agent use a child's own tools anyway. The call goes home engine →
+bridge → the child's engine, which runs the tool under its own permissions,
+kill switches and audit. Nothing runs in the child's database scope from the
+parent's engine, and engines never call each other directly.
+
+- **`org_tools`** `{tenant?, tool?}`: with no arguments, every reachable child
+  company's plugins (name, version, enabled), its declared remote tools (name,
+  `read` or `write`, a short description) and its plugins' health checks, one
+  entry per company; a company that does not answer is that entry's
+  `status: "error"` only. With `tenant`, that company only. With `tenant` and
+  `tool`, that tool's parameters and notes. Read-only.
+- **`org_tool_read`** `{tenant, tool, args?}`: runs one of the child's
+  declared read tools and returns `outcome` and `result`. Read-only.
+- **`org_tool_write`** `{tenant, tool, args?, dry_run?}`: runs one of the
+  child's declared write tools. `dry_run: true` returns `outcome: "dry_run"`
+  and `would` without changing anything. `dry_run` goes at the top level:
+  inside `args` it is refused unless the child's tool declares its own
+  `dry_run`, and `org_tool_read` takes none.
+
+A child offers only the tools its plugins declare remote
+([Plugins](PLUGINS.md)), each as a read or a write; a tool may also require an
+attestation the parent's deployment must make (`GENUS_ORG_REMOTE_ATTESTATIONS`,
+for example a signed data agreement). The engine admits a call in this order,
+and refuses with one sentence, sending nothing, at the first that fails:
+
+1. `tenant` must look like a tenant id (anything else reads as unreachable);
+2. a live, top-level run: a sub-agent or benchmark run is refused;
+3. a tenant the run may reach that is not its own. An unknown tenant and an
+   unreachable one get the same sentence; the run's own tenant is refused with
+   a pointer to call the tool directly;
+4. a write: a person-started run by the verified owner. A scheduled or other
+   unattended run never writes;
+5. `dry_run` must be the boolean `true` or `false`.
+
+There is no setting that turns remote tools on or off. A child controls what
+it offers through its plugins' `remote` declarations, its per-tool grants and
+its roles; how an operator stops or narrows them is in the
+[tenant hierarchy runbook](runbooks/TENANT_HIERARCHY.md#using-a-childs-connectors).
+
+The bridge and the child check again (the person must be an owner or admin of
+the parent who may act in the child, an owner for a write; a person-less read
+needs the parent's child data access and a per-tool grant of the child's
+`parent_agent` role). A refusal from the child keeps its code in
+`error_code` (`remote_tool_unknown`, `remote_attestation_missing`,
+`remote_not_permitted`, …) beside the sentence in `error`. A write the child
+cannot account for (`remote_outcome_unknown`, a timeout, a 5xx or any answer
+that is neither a known outcome nor a refusal given before the call ran, or a
+child tool that reported `outcome_unknown` or crashed) is reported with
+`outcome_unknown: true` and a sentence saying the child's system may or may
+not have changed. The effect ledger then holds every later write to that
+same tool in that same company, however it is worded (a reworded retry would
+carry a new request id the child runs again), until it is reconciled; writes
+to another company or another tool, and dry runs, are not held. The refusal
+names the uncertain call by company, tool and a digest of its arguments,
+never the arguments. A plain error the child's tool returned is a finished
+call (`outcome: "error"`), not unknown, and a replay of it still reads as that
+error (the target answers `outcome: "replayed"` with `original_outcome`). A write that ran but whose result is over 256 kB is
+reported as done with `result: null`, `result_withheld` (`reason:
+"too_large"`, its size and the cap) and a note, never as a refusal, so the
+ledger records it and a retry replays it; a read over the cap is refused
+(`remote_too_large`). Each write is journalled in the home effect ledger and
+its effect id travels as the child's dedupe key, so a replay is answered from
+the ledger and never sent twice. Each call can take up to 180 seconds.
+
+Every call, allowed or refused, writes an `agent.cross_tenant_call` row under
+the home tenant with `tool` set to `org_tools`, `org_tool_read` or
+`org_tool_write` and `details.remote_tool` naming the child's tool. That
+includes a write the effect ledger holds before it runs (status `denied`,
+`details.outcome: "held_uncertain"`, and `details.held` naming the uncertain
+call by effect id and digest), and the same goes for any write held while
+crossing into another tenant with `tenant`. The child
+writes its own `agent.remote_tool_call` row, whose `status` is one word (`ok`,
+`error`, `denied`, `dry_run`, `replayed`, `unknown`) and whose
+`details.outcome` holds the exact code. Neither row carries the arguments or
+the child's own error text. Results are wrapped as untrusted
+content: they come from the child's systems.
+
+**Which to use.** For a child's tasks, runs, notes, people and other CRM data,
+pass `tenant` to the ordinary tool (`list_tasks`, `get_agent_run`, …): that
+data lives in the shared database and the `tenant` argument reads it
+directly. Use `org_tools` / `org_tool_read` only when the answer lives in a
+system the child is connected to and this company is not (its practice
+software, its ticketing system). Use `org_tool_write` only when the owner asks
+for a change in chat, preview with `dry_run: true` when the effect is not
+obvious, and never to work around a tool this company has itself.
+
 ### Credentials: `vault_get`, `vault_set`, `vault_test`, `vault_list`, `vault_delete`
 
 An agent whose own manifest declares `v2.credentials: operator` holds these
@@ -2142,6 +2240,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Skills | `list_skills`, `invoke_skill` |
 | Plugins | [`plugins_overview`](#what-plugins-contribute-plugins_overview) |
 | Child tenants | [`org_overview`, and `tenant` / `dry_run` on CRM and run tools](#child-tenants-org_overview-the-tenant-argument-and-dry_run) |
+| A child company's own tools | [`org_tools`, `org_tool_read`, `org_tool_write`](#a-child-companys-own-tools-org_tools-org_tool_read-org_tool_write) |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
 | Workflows | [`list_workflows`, `run_workflow`, `workflow_runs`](#workflows-list_workflows-run_workflow-workflow_runs) |
 | Workspaces | [`room_create`, `room_update`, `room_list`, `room_read`, …](#workspaces-room_) (the main agent's) |
@@ -2391,6 +2490,15 @@ engine, whose refusals name it.
 for what the agent can do, a fail naming the gate and the unlock for what it
 cannot. Not a verdict on the instance; it is where to look when an agent says it
 cannot do something the person expected. `--agent <id>` reports one agent.
+
+**`capabilities.remote_tools`** (recommended) — when the tenant has child
+tenants, fails for each agent that uses the
+remote tools (`main`, and any agent granted `org_tools`, `org_tool_read` or
+`org_tool_write`) which the bridge's `agent_capabilities.json` lists without
+`"GET /api/org/remote/*"` and `"POST /api/org/remote/call"` in its
+`bridge_endpoints`, naming the file and the patterns to add. An agent the file
+does not list passes: the remote routes are authorised by the `org:remote`
+scope.
 
 ### Autonomy first
 

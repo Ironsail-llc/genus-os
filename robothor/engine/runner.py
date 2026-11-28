@@ -936,6 +936,7 @@ class AgentRunner(
             tenant_id=resolved_tenant,
             actor_id=effective_user_id,
             capability=_tier,
+            accessible_tenant_ids=_accessible_tenants,
         )
         tool_schemas = _prepared.tool_schemas
         tool_names = _prepared.tool_names

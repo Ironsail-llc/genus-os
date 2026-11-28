@@ -34,6 +34,18 @@ logger = logging.getLogger(__name__)
 # Lazy connection resolution — don't import config at module level so tests can mock
 _conn_factory = None
 
+#: ``audit_log``'s bounded columns (``infra/migrations/001_init.sql``). A value
+#: longer than its column fails the INSERT and the row is lost, so a caller
+#: whose values are not fixed short words cuts them to these.
+COLUMN_LIMITS: dict[str, int] = {
+    "event_type": 50,
+    "category": 50,
+    "actor": 100,
+    "source_channel": 50,
+    "target": 255,
+    "status": 20,
+}
+
 
 @dataclass(frozen=True)
 class RequestActor:

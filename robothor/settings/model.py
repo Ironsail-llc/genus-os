@@ -1852,6 +1852,17 @@ class AuthSettings(SettingsGroup):
         restart_units=("robothor-bridge",),
         since="1.127.0",
     )
+    org_remote_attestations: str = declare(
+        "",
+        "GENUS_ORG_REMOTE_ATTESTATIONS",
+        "Comma-separated attestation tokens this deployment vouches for when "
+        "it calls a descendant tenant's remote tools (each matching "
+        "^[a-z][a-z0-9_]{0,31}$). A remote tool that requires a token not "
+        "listed here is refused. The bridge presents its own value; a value "
+        "in a request is ignored. Malformed tokens are dropped and logged.",
+        restart_units=("robothor-bridge", "robothor-engine"),
+        since="1.141.0",
+    )
     tenant_switch_allow_inert_rls: bool = declare(
         False,
         "GENUS_TENANT_SWITCH_ALLOW_INERT_RLS",

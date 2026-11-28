@@ -426,6 +426,97 @@ PLUGIN = {
 As with `read_only`, a plugin declares this only for tools it provides; a
 declaration naming another tool, or a malformed one, refuses the plugin.
 
+## A tool a parent tenant may run here
+
+In a tenant hierarchy, a parent tenant's agent can run some of a child
+tenant's plugin tools in that child (a remote tool). Nothing is remote unless
+the plugin that provides the tool says so, in its `genus.tools` payload beside
+`read_only` and `effects`:
+
+```python
+# acme_tools/__init__.py
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "handlers": {"acme_lookup": acme_lookup, "acme_update": acme_update},
+    "read_only": ["acme_lookup"],
+    "remote": {
+        "acme_lookup": {
+            "access": "read",
+            "notes": "Find one record by its reference; use it before acme_update.",
+        },
+        "acme_update": {"access": "write", "attestations": ["baa"]},
+    },
+}
+```
+
+- **`access`** (required): `read` or `write`. A `read` must be a tool this
+  plugin also lists in `read_only`.
+- **`attestations`** (optional, default none): tokens matching
+  `^[a-z][a-z0-9_]{0,31}$`. The parent's deployment must attest every one
+  (`GENUS_ORG_REMOTE_ATTESTATIONS` on the bridge) before the call runs; the
+  refusal names the first missing token.
+- **`notes`** (optional, at most 600 characters): when to use the tool. The
+  parent's agent reads it with the tool's schema.
+
+The rules are `read_only`'s: a plugin offers only tools it provides. A
+foreign tool, an unknown key, a bad `access`, a `read` outside `read_only`, a
+malformed token, notes over the limit, or any value of the wrong type refuse
+the whole plugin (never the other plugins), and the reason names the tool.
+
+The manifest must mirror the declaration (a dict, never a list), because the
+pre-install scan reads only the manifest:
+
+```yaml
+# acme_tools/genus-plugin.yaml
+handlers: [acme_lookup, acme_update]
+remote_tools:
+  read: [acme_lookup]
+  write: [acme_update]
+```
+
+The loader refuses a payload that declares `remote` without this mirror, and a
+payload whose read and write sets differ from it. The scan reports it
+(`remote_tools` in the scan result) and blocks a malformed one: a key other
+than `read` and `write`, a tool named for both, or a tool the manifest does not
+declare as its own.
+
+What the child tenant's engine checks before the tool runs, in order: that
+the tool is declared and for that access, who is asking (an owner or admin of the parent, and an owner
+for a write; or, with no person, the parent's child-data grant and the
+`parent_agent` role, reads only), the attestations, and the arguments against
+the tool's own schema. A write needs a request id and runs at most once for
+it; a second call with that id but another tool or other arguments is
+refused. A write whose result is over 256 kB is still reported as done, with
+the result withheld, so keep a write's result small.
+
+How a write tool reports a failure decides what the parent is told:
+
+- **It may have acted** (the request was sent and the answer lost, a timeout
+  after sending): return the error with `"outcome_unknown": true`. The parent
+  is told the system may or may not have changed, the request id is never run
+  again, and the parent's identical call is fenced until reconciled. The engine
+  sets this itself when the tool raises (`tool_crashed`), when an `httpx`
+  transport error escapes a write tool, and when the call runs out of time.
+- **It did not act** because a control stopped it (your kill switch, a
+  precondition): return `robothor.engine.refusal.refusal(...)` (`refused:
+  true`). The request id is released, so a retry runs once the control clears.
+- **It completed and the system said no** (`{"error": "slot already taken"}`):
+  return a plain error. That is a finished call: stored, replayed for the same
+  request id, never fenced.
+
+A declared name that an external MCP adapter in the child also provides is
+not offered remotely (unknown to the parent), since dispatch would route it to
+the adapter. The call then goes through the normal dispatch in the child tenant, so
+the role's permission rows, kill switches and your own audit apply as they do
+for any call. `parent_agent` is denied everything until the child grants it a
+tool ([Service roles](runbooks/SERVICE_ROLES.md#roles-available)). Your tool
+receives a `ctx` whose `tenant_id` is the child, whose `user_id` is the person
+(empty for `parent_agent`), and whose `agent_id` is `remote:<parent>:<agent>`.
+
+The engine routes are in [System architecture](SYSTEM_ARCHITECTURE.md); each
+call is audited in the child as `agent.remote_tool_call`, with a digest of the
+arguments and never the arguments or the result.
+
 ## An operator command
 
 ```python

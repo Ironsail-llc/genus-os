@@ -996,6 +996,36 @@ descendant, so each call leaves one row per child. The dashboard calls it only
 when its page is opened or refreshed. The Helm's page over this route is described in
 [Tenant hierarchy](runbooks/TENANT_HIERARCHY.md#the-command-centre).
 
+### Remote tools over the API
+
+`GET /api/org/connections` answers the same callers as `/api/org/overview`
+(a human `owner` or `admin` at home; anyone else `403`) with what each
+descendant's engine offers its parent through remote tools. The home tenant is
+not in `tenants`. Each engine is asked concurrently with a 10-second budget, so
+one slow or stopped engine is that entry's `status: "error"` and never holds
+the reply.
+
+| Field | Meaning |
+|-------|---------|
+| `as_of` | When the reply was assembled. |
+| `home_tenant_id` | The caller's tenant. |
+| `tenants` | One entry per descendant: `tenant_id`, `display_name`, `status` (`ok` or `error`), `error` (null when `ok`), and the engine's `plugins` (name, version, enabled), `tools` (name, plugin, `read` or `write`, attestations, short description) and `checks` (the plugins' doctor checks: name, status, short detail; secrets are redacted, filesystem paths replaced and any URL cut to its scheme, host and port). |
+
+Each descendant asked writes an `org.connections` audit row filed under it.
+
+`GET /api/org/remote/catalogue?tenant=<id>[&tool=<name>]` and `POST
+/api/org/remote/call` are for engines only: a service token carrying the
+`org:remote` scope (a person, whatever their role, gets `403`). The token's
+tenant is the home tenant. The bridge refuses an unknown or non-descendant
+target with `404` and the engine's unreachable sentence, checks the mode and
+who the call is for, then forwards to the target's engine (up to 165 seconds,
+one attempt) with its own `GENUS_ORG_REMOTE_ATTESTATIONS`, and answers with the
+target's status and body unchanged. Refusals have the body
+`{"error": "<code>", "message": "...", "attestation": null}`. Each call writes an
+`org.remote_call` (or `org.remote_catalogue`) audit row filed under the target,
+with a digest of the arguments, never the arguments. The agent's side is in
+[Tools](TOOLS.md#a-child-companys-own-tools-org_tools-org_tool_read-org_tool_write).
+
 ### The forwarded client address needs two allowlists to agree
 
 The dashboard reads `X-Forwarded-For`, walks it from the **right**, and forwards

@@ -549,6 +549,10 @@ tenancy:
   # row-level security is inert. Unset: not set (false). A deliberate escape
   # hatch; see the setting's description before turning it on.
   # allowInertRls: false
+  # GENUS_ORG_REMOTE_ATTESTATIONS: what this deployment attests for the parent
+  # side (lowercase tokens, rendered comma-joined), presented by the bridge to
+  # a child company whose tool requires one. Empty: not set (none).
+  remoteAttestations: []
 
 # ─── Tenant engine cells ─────────────────────────────────────────────────────
 # Additional engines, one per child tenant, in this release. The root engine
