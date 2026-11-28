@@ -32,6 +32,7 @@ No database: the extraction is a model call and a parse.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, field
@@ -52,6 +53,8 @@ from robothor.memory.eval_answer import (
     normalise,
 )
 from robothor.memory.facts import Extraction
+
+logger = logging.getLogger(__name__)
 
 SUITE_ID = "conversation-facts-v1"
 DEFAULT_FIXTURES = "docs/benchmarks/memory/conversation-facts.yaml"
@@ -495,8 +498,15 @@ async def score_conversation(
         for i, got in enumerate(score.extracted):
             try:
                 verdict = await judge(exp, got.text)
-            except Exception:  # noqa: BLE001 — a judge error is no match, and counted
+            except Exception as exc:  # noqa: BLE001 — a judge error is no match, and counted
                 score.judge_errors += 1
+                logger.warning(
+                    "extraction judge raised on %s against %r: %s: %s",
+                    exp.id,
+                    got.text[:120],
+                    type(exc).__name__,
+                    exc,
+                )
                 continue
             if not verdict.correct:
                 continue
@@ -848,6 +858,7 @@ def format_extraction_markdown(report: dict[str, Any]) -> str:
         f"of {m['third_party_matched']} matched |",
         f"| Unlabelled user-stated facts from relaying turns | {m['possible_misattributions']} |",
         f"| Extraction errors | {m['extraction_errors']} |",
+        f"| Judge errors | {m['judge_errors']} |",
         "",
         "Attribute accuracies are over the "
         f"{m['matched_for_attributes']} labels that were matched.",
