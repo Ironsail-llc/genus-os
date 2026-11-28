@@ -955,19 +955,44 @@ async def test_a_successful_write_is_still_stored_and_replayed(world) -> None:
 # ── the catalogue's detail scrubber ──────────────────────────────────────────
 
 
-def test_check_details_keep_a_urls_host_and_drop_its_credentials_and_query() -> None:
+def test_check_details_keep_only_a_urls_scheme_host_and_port() -> None:
     from robothor.engine.remote_tools import _clean
 
     text = _clean(
-        "token from https://svc-user:hunter2@api.example.com:8443/v1/token?key=abc123 "
+        "token from https://svc-user:pa55word@api.example:8443/v1/token?key=abc123#frag "
         "kept at /srv/acme/conf.yaml"
     )
 
-    assert "https://api.example.com:8443/v1/token" in text
-    assert "hunter2" not in text and "svc-user" not in text
-    assert "abc123" not in text and "key=" not in text
+    assert "https://api.example:8443" in text
+    assert "pa55word" not in text and "svc-user" not in text
+    assert "abc123" not in text and "key=" not in text and "frag" not in text
+    assert "/v1/token" not in text
     assert "/srv/acme" not in text and "<path>" in text
     assert "http:/<path>" not in text
+
+
+@pytest.mark.parametrize(
+    ("url", "secret"),
+    [
+        # A chat webhook: the last path segment is the credential.
+        (
+            "https://hooks.chat.example/services/T0000/B0000/webhooksecretvalue",
+            "webhooksecretvalue",
+        ),
+        # An id and a token in the path.
+        ("https://chat.example/api/webhooks/1234567/webhooktokenvalue", "webhooktokenvalue"),
+        # A bot API: the token rides in the first segment.
+        ("https://api.bot.example/bot1234567:bottokenvalue/getMe", "bottokenvalue"),
+    ],
+)
+def test_check_details_never_keep_a_credential_carried_in_a_urls_path(url, secret) -> None:
+    from robothor.engine.remote_tools import _clean
+
+    text = _clean(f"could not post to {url}: 404")
+
+    assert secret not in text
+    assert "1234567" not in text
+    assert text.startswith("could not post to https://") and text.endswith(": 404")
 
 
 def test_check_details_scrub_a_windows_path() -> None:
