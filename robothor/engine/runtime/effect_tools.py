@@ -126,13 +126,24 @@ _CORE_TARGET_KEYS: dict[str, tuple[str, ...]] = {
     "org_tool_write": ("tenant", "tool", "args_digest"),
 }
 
+#: The part of a core target the fence compares. For ``org_tool_write`` that
+#: is the child and its tool, never the arguments: a reworded retry (an added
+#: blank field, "10" for 10) carries a new request id the child would run
+#: again, so it must wait like the call it repeats. The digest is kept in the
+#: stored target only, to name the uncertain call.
+_CORE_FENCE_KEYS: dict[str, tuple[str, ...]] = {
+    "org_tool_write": ("tenant", "tool"),
+}
+
 
 def _core_target(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     from robothor.tenancy.remote_contract import args_digest
 
     inner = arguments.get("args")
+    tenant = arguments.get("tenant")
     return {
-        "tenant": arguments.get("tenant"),
+        # As the handler reads it (cross_tenant._tenant_target strips it).
+        "tenant": tenant.strip() if isinstance(tenant, str) else tenant,
         "tool": arguments.get("tool"),
         "args_digest": args_digest(inner if isinstance(inner, dict) else {}),
     }
@@ -170,6 +181,8 @@ def target_key(tool_name: str, target: dict[str, Any]) -> str | None:
     """The hash the fence compares; None (fence the whole tool) without a declared target."""
     if not declared_target(tool_name):
         return None
+    if tool_name in _CORE_FENCE_KEYS:
+        target = {key: target.get(key) for key in _CORE_FENCE_KEYS[tool_name]}
     payload = json.dumps([tool_name, target], sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode()).hexdigest()
 

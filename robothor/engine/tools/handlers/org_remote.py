@@ -468,6 +468,10 @@ async def _call(name: str, args: dict[str, Any], ctx: ToolContext, access: str) 
             "return here. Do not run it again; check the outcome in that company."
         )
     unknown = access == ACCESS_WRITE and answer.get("outcome_unknown") is True
+    if outcome == OUTCOME_REPLAYED and answer.get("original_outcome") == OUTCOME_ERROR:
+        # A replay answers what the first call answered: a stored failure is
+        # still a failure.
+        outcome = OUTCOME_ERROR
     if outcome == OUTCOME_ERROR:
         inner = answer.get("result")
         detail = inner.get("error") if isinstance(inner, dict) else None

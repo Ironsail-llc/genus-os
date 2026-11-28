@@ -2034,10 +2034,14 @@ cannot account for (`remote_outcome_unknown`, a timeout, a 5xx or any answer
 that is neither a known outcome nor a refusal given before the call ran, or a
 child tool that reported `outcome_unknown` or crashed) is reported with
 `outcome_unknown: true` and a sentence saying the child's system may or may
-not have changed. The effect ledger then fences that same call (the same
-child, tool and arguments, compared by a digest) until it is reconciled;
-other calls of `org_tool_write`, and dry runs, are not held. A plain error the
-child's tool returned is a finished call (`outcome: "error"`), not unknown. A write that ran but whose result is over 256 kB is
+not have changed. The effect ledger then holds every later write to that
+same tool in that same company, however it is worded (a reworded retry would
+carry a new request id the child runs again), until it is reconciled; writes
+to another company or another tool, and dry runs, are not held. The refusal
+names the uncertain call by company, tool and a digest of its arguments,
+never the arguments. A plain error the child's tool returned is a finished
+call (`outcome: "error"`), not unknown, and a replay of it still reads as that
+error (the target answers `outcome: "replayed"` with `original_outcome`). A write that ran but whose result is over 256 kB is
 reported as done with `result: null`, `result_withheld` (`reason:
 "too_large"`, its size and the cap) and a note, never as a refusal, so the
 ledger records it and a retry replays it; a read over the cap is refused

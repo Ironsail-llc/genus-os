@@ -486,6 +486,26 @@ def _answer(
     }
 
 
+#: The keys of a tool result that say how a call ended.
+_SIGNALS = ("error", "refused", "gate", "gate_name", "outcome_unknown", "tool_crashed")
+
+
+def _text_keys(value: Any, seen: frozenset[int] = frozenset()) -> Any:
+    """``value`` with every mapping key as text (a UUID, datetime or tuple key
+    would stop ``json.dumps``). Raises ValueError on a cycle."""
+    if isinstance(value, dict | list | tuple):
+        if id(value) in seen:
+            raise ValueError("circular result")
+        inner = seen | {id(value)}
+        if isinstance(value, dict):
+            return {
+                (k if isinstance(k, str) else str(k)): _text_keys(v, inner)
+                for k, v in value.items()
+            }
+        return [_text_keys(v, inner) for v in value]
+    return value
+
+
 def _plain(result: dict[str, Any]) -> tuple[dict[str, Any], int]:
     """``result`` as strict JSON (anything else as text, NaN and infinities as
     strings), and its encoded size."""
@@ -494,11 +514,17 @@ def _plain(result: dict[str, Any]) -> tuple[dict[str, Any], int]:
         return name  # NaN, Infinity, -Infinity: kept as their names
 
     try:
-        text = json.dumps(result, default=str)
+        text = json.dumps(_text_keys(result), default=str)
         plain = json.loads(text, parse_constant=_text_constant)
         encoded = json.dumps(plain, allow_nan=False)
     except (TypeError, ValueError, RecursionError):
+        # A circular result, or one deeper than JSON goes. The signals the
+        # caller settles on come along, as text, so nothing reads as success.
         plain = {"result_unencodable": True, "type": type(result).__name__}
+        for key in _SIGNALS:
+            if key in result:
+                value = result[key]
+                plain[key] = value if isinstance(value, bool) else str(value)[:500]
         encoded = json.dumps(plain)
     if not isinstance(plain, dict):
         plain = {"result": plain}
@@ -705,6 +731,9 @@ async def _claim(
     status = int(stored.get("status") or 200)
     body = dict(stored["body"])
     if status == 200:
+        # The first answer's outcome stays readable: a replayed error is
+        # still an error to the caller.
+        body["original_outcome"] = body.get("outcome")
         body["outcome"] = rc.OUTCOME_REPLAYED
     return status, body
 
@@ -753,7 +782,7 @@ async def _dispatch(
     # One plain-JSON copy of the result, used for the size, the ledger and the
     # answer alike: a datetime, Decimal, UUID or NaN would otherwise pass the
     # size check, be stored, and then fail to render AFTER the write ran.
-    result, size = _plain(result)
+    # How the call ended is read from the RAW result, before it is made plain.
     outcome = rc.OUTCOME_ERROR if "error" in result else rc.OUTCOME_OK
     settle = _DONE
     unknown = False
@@ -761,6 +790,7 @@ async def _dispatch(
         settle = _RELEASE  # a control refused it: a retry may run once lifted
     elif write and _outcome_unknown(result):
         settle, unknown = _KEEP, True
+    result, size = _plain(result)
     if size > rc.REMOTE_RESULT_MAX_BYTES:
         if not write:
             return 413, refusal_body(rc.ERR_TOO_LARGE), settle
