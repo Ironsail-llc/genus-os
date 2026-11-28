@@ -111,8 +111,10 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    head holds no segment at all, the best one (the first segment of the
    fused list) is scored as one more pair (`facts._segment_to_judge`). It
    takes a place only when judged relevant (score at least
-   `reranker.RELEVANT_SCORE`, 0.5); otherwise it is dropped and the result is
-   exactly what it is without it. A segment the head already holds costs
+   `reranker.RELEVANT_SCORE`, 0.5), and that place is the head's last
+   (`facts._last_in_head`), whatever its score: read first, it made the
+   answer model abstain, and its fused rank is past what the context holds.
+   Otherwise it is dropped and the result is exactly what it is without it. A segment the head already holds costs
    nothing extra. On any reranker error, or with the reranker unavailable,
    the judged segment is dropped and the fused order stands.
 4. **Blend** — `relevance` (the rerank score, or `10 / (10 + fused rank)` when
