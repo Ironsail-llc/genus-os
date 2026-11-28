@@ -139,6 +139,22 @@ exit code while their status is `PROPOSED`:
 `--record-baseline` with `--extraction` writes a run as the new baseline (to
 `--baseline`, or beside the fixtures), keeping the file's thresholds block.
 Record from two or more repeats, so the tolerance has a spread to come from.
+`--from-report <saved report.json>`, repeated, records from saved run reports
+instead, without running the model. The verdicts are the saved ones, as the
+judge gave them on those runs.
+
+The committed file was recorded that way, from the JSON reports of the three
+runs below, one alone and two as `--repeats 2`:
+
+```bash
+robothor memory-eval --extraction --record-baseline \
+  --baseline docs/benchmarks/memory/conversation-facts-baseline.yaml \
+  --from-report run-1.json --from-report runs-2-3.json
+```
+
+Those runs were judged with the subject-aware question of `beb6230ea`. Guest
+claims written as the user were recomputed from the saved facts, since the
+reports predate that metric. The thresholds block was written by hand.
 
 ## Not in this change
 

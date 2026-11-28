@@ -54,6 +54,3 @@ thresholds:
   max:
     misattributed_to_operator: 0
     guest_as_user: 0
-recorded_on: '2026-11-28'
-harness: judge question of commit beb6230ea; three runs, one alone and two as --repeats
-  2
