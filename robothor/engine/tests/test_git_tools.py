@@ -307,14 +307,16 @@ class TestGitCommitExecutor:
 
 class TestGitPushExecutor:
     def test_push_success(self):
-        branch_result = MagicMock(stdout="nightwatch/fix\n", returncode=0)
-        push_result = MagicMock(returncode=0, stdout="pushed\n", stderr="")
+        branch_result = MagicMock(stdout="nightwatch/fix", returncode=0)
+        push_result = MagicMock(returncode=0, stdout="pushed", stderr="")
+        head_result = MagicMock(stdout="abc1234567890", returncode=0)
+        lsremote_result = MagicMock(stdout="abc1234567890 refs/heads/nightwatch/fix", returncode=0)
 
         call_count = 0
 
         def side_effect(*args, **kwargs):
             nonlocal call_count
-            r = [branch_result, push_result][call_count]
+            r = [branch_result, push_result, head_result, lsremote_result][call_count]
             call_count += 1
             return r
 
@@ -323,10 +325,56 @@ class TestGitPushExecutor:
 
             result = _handle_sync_tool("git_push", {}, workspace="/tmp/repo")
             assert result["pushed"] is True
+            assert result["verified"] is True
             assert result["branch"] == "nightwatch/fix"
 
+    def test_push_unverified_when_remote_head_mismatch(self):
+        """A zero exit code must not be reported as a landed push."""
+        branch_result = MagicMock(stdout="nightwatch/fix", returncode=0)
+        push_result = MagicMock(returncode=0, stdout="pushed", stderr="")
+        head_result = MagicMock(stdout="abc1234567890", returncode=0)
+        lsremote_result = MagicMock(stdout="deadbeef0000 refs/heads/nightwatch/fix", returncode=0)
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            r = [branch_result, push_result, head_result, lsremote_result][call_count]
+            call_count += 1
+            return r
+
+        with patch("robothor.engine.tools.handlers.git.subprocess.run", side_effect=side_effect):
+            from robothor.engine.tools import _handle_sync_tool
+
+            result = _handle_sync_tool("git_push", {}, workspace="/tmp/repo")
+            assert result["pushed"] is False
+            assert result["verified"] is False
+            assert "error" in result
+
+    def test_push_unverified_when_branch_absent_remotely(self):
+        """An empty ls-remote (branch never reached the remote) is not success."""
+        branch_result = MagicMock(stdout="nightwatch/fix", returncode=0)
+        push_result = MagicMock(returncode=0, stdout="pushed", stderr="")
+        head_result = MagicMock(stdout="abc1234567890", returncode=0)
+        lsremote_result = MagicMock(stdout="", returncode=0)
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            r = [branch_result, push_result, head_result, lsremote_result][call_count]
+            call_count += 1
+            return r
+
+        with patch("robothor.engine.tools.handlers.git.subprocess.run", side_effect=side_effect):
+            from robothor.engine.tools import _handle_sync_tool
+
+            result = _handle_sync_tool("git_push", {}, workspace="/tmp/repo")
+            assert result["pushed"] is False
+            assert result["verified"] is False
+
     def test_push_rejects_main(self):
-        branch_result = MagicMock(stdout="main\n", returncode=0)
+        branch_result = MagicMock(stdout="main", returncode=0)
 
         with patch("robothor.engine.tools.handlers.git.subprocess.run", return_value=branch_result):
             from robothor.engine.tools import _handle_sync_tool
@@ -336,7 +384,7 @@ class TestGitPushExecutor:
             assert "protected" in result["error"]
 
     def test_push_rejects_master(self):
-        branch_result = MagicMock(stdout="master\n", returncode=0)
+        branch_result = MagicMock(stdout="master", returncode=0)
 
         with patch("robothor.engine.tools.handlers.git.subprocess.run", return_value=branch_result):
             from robothor.engine.tools import _handle_sync_tool
