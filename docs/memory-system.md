@@ -87,9 +87,9 @@ Ratio knobs (ported from the source project): `ROBOTHOR_MEMORY_OFFLOAD_MILD_RATI
 
 Nightly in `robothor/memory/lifecycle.py::run_lifecycle_maintenance`:
 
-1. Importance scoring (LLM-judged, 200/run, 600s budget)
-2. Decay computation (recency × access × reinforcement × importance × **outcome penalty**)
-3. Garbage pruning (low decay + low importance + zero accesses)
+1. Importance scoring (LLM-judged, 200/run, 600s budget) of facts not yet marked scored
+2. Decay computation (recency of use × access × reinforcement × importance × **outcome penalty**)
+3. Garbage pruning (low decay + low importance + never recalled)
 4. Consolidation (similar facts merged, superseded via `is_active=FALSE`)
 5. Unconsolidated sweep
 6. Cross-domain insight discovery (72h window)
@@ -99,6 +99,11 @@ Nightly in `robothor/memory/lifecycle.py::run_lifecycle_maintenance`:
 10. **Chat TTL** — delete 90d+ un-pinned, un-referenced verbatim turns
 11. **Breadcrumb pruning + promotion** — hot breadcrumbs promoted to `memory_facts`
 12. **Access log GC** — trim attribution history past 30d
+13. **Intent inference** — propose standing intents from recent facts (when `MEMORY_INTENT_POPULATE` is on)
+
+Every step runs once per active tenant (`crm_tenants.active`), inside `tenant_scope(tenant)`, and reads and writes only that tenant's rows. A consolidated fact never merges two tenants' facts, an insight never cites another tenant's facts and is deduplicated only against its own tenant's insights, and an inferred relation never joins two tenants' entities. Each derived row is written to the tenant of its sources. With `ROBOTHOR_RLS_ENABLED` on, the scope binds each step's connections to that tenant, so child tenants are maintained as well as the process's own. Step 1's 600s scoring budget covers the whole pass and is charged only for time spent scoring: each tenant may use an equal share of what is still unspent, so a tenant that needs less leaves more for the rest and no tenant is left unscored because an earlier tenant's other steps were slow. A tenant whose steps fail is logged and skipped; the others are still maintained. autoDream's lighter idle pass works the same way: intra-day consolidation, pruning, insight discovery (whose insights it now stores), the `working_context` refresh and preference mining each run once per tenant, and a tenant that fails is named in the run's recorded error while the pass carries on for the rest.
+
+Knowledge-gap analysis (`robothor/memory/gap_analysis.py`) reads one tenant: the calling run's tenant for the `get_knowledge_gaps` engine tool, `DEFAULT_TENANT` when no tenant is given (the MCP `get_knowledge_gaps` handler and the curiosity-density check currently pass none).
 
 ## Outcome-Driven Invalidation
 
@@ -183,9 +188,9 @@ Every fact has lifecycle columns that drive autonomous maintenance:
 
 | Column | Purpose |
 |--------|---------|
-| `access_count` | Incremented on search hits |
-| `last_accessed` | Updated on search hits |
-| `importance_score` | LLM-judged (0.0-1.0) |
+| `access_count` | Incremented each time recall returns the fact to an agent |
+| `last_accessed` | Set to now each time recall returns the fact (insert time until then) |
+| `importance_score` | LLM-judged (0.0-1.0); 0.5 until judged |
 | `decay_score` | Computed: recency + access + reinforcement + importance |
 | `reinforcement_count` | Incremented when fact is confirmed by new evidence |
 
@@ -200,6 +205,48 @@ score = max(importance_floor, recency) + access_boost + reinforcement_boost
 ```
 
 A fact with high importance can never fully decay (importance_floor). Frequently accessed facts resist decay via access_boost.
+
+**What counts as use.** A fact is used when recall returns it to an agent: the
+`search_memory` tool (every fact row it returns) and warm-up entity recall
+(every fact it injects into the preamble, interactive and goal recall alike).
+Each raises `access_count` by one and sets `last_accessed` to now, so recency
+is time since last use, not age. `search_facts` itself never writes; the two
+call sites do (`robothor.memory.outcomes.record_fact_access`, by fact id, or
+for warm-up's v2 recall, which returns no id, by the fact's content hash), and a caller
+that must have no side effects passes `record_access=False` to
+`_search_memory` or `_build_entity_context`. The eval harness calls
+`search_facts` directly and records nothing. Benchmark runs record nothing.
+
+The write never slows or fails recall. The search tool hands it to a tracked
+background task that runs it in a worker thread; warm-up hands it to its
+deferred writer. A failed write is logged and the results are returned as
+they were.
+
+**History from before recall was recorded.** Migration 094's
+`access_count_shadow` and `last_accessed_shadow` hold the use history
+`scripts/memory_decay_backfill.py` recovers from `fact_access_log`. Decay and
+prune read the greater of each live column and its shadow, so that history
+counts without double-counting a search hit that is both logged and recorded.
+Retrieval ranking reads only the live `access_count`.
+
+**Prune.** A fact is retired when its decay score is below 0.1, its
+importance below 0.3, and it has never been recalled (both use counts zero),
+outside the protected categories and operator-confirmed facts. One recall
+gives an access boost of ln 2 / 5 ≈ 0.14, which keeps a used fact above the
+decay threshold.
+
+**Importance scoring.** The judge scores only facts whose importance nobody
+has judged or set: no `metadata.importance_scored_at` marker, and a score
+still exactly what reinforcement alone gives from the 0.5 default
+(`LEAST(0.5 + 0.05 × reinforcement_count, 1.0)`). A score set any other way —
+an earlier verdict, a resolution's 0.85, the importance a consolidated fact
+inherits — is never overwritten. The judge's score is stored with the
+reinforcement the fact has earned added on top (same 1.0 cap), and the fact is
+marked. A neutral 0.5 on a fact never reinforced is not marked, because the
+judge also returns 0.5 on a timeout; rewriting it is a no-op, and it is
+retried. A reinforced fact is marked whatever the verdict. Unjudged events
+older than 30 days are scored 0.3, plus their reinforcement, without the
+judge, and marked.
 
 ```python
 from robothor.memory.lifecycle import compute_decay_score, run_lifecycle_maintenance

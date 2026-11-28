@@ -136,9 +136,50 @@ async def merge_plugin_memory(query: str, builtin: list[str], *, limit: int = 10
     return merged
 
 
+#: Result sources whose ``id`` is a ``memory_facts`` id (an insight's or an
+#: episode's is not).
+_FACT_SOURCES = (None, "fact", "entity_expansion")
+
+
+def _schedule_access_recording(results: list[dict[str, Any]], tenant_id: str) -> None:
+    """Count the returned facts as used, without the search waiting for it.
+
+    The UPDATE runs in a worker thread under a tracked background task (the
+    same shape as conversation ingest), so neither this request nor the event
+    loop waits on it. Any failure is logged, never raised: the caller is a
+    retrieval.
+    """
+    from robothor.memory.outcomes import record_fact_access
+
+    fact_ids = [r["id"] for r in results if r.get("source") in _FACT_SOURCES and r.get("id")]
+    if not fact_ids:
+        return
+
+    async def _record() -> None:
+        try:
+            await asyncio.to_thread(record_fact_access, tenant_id, fact_ids=fact_ids)
+        except Exception as exc:  # noqa: BLE001 - best-effort accounting
+            logger.warning("search_memory: recording fact access failed: %s", exc)
+
+    coro = _record()
+    try:
+        from robothor.engine.task_registry import get_task_registry
+
+        get_task_registry().spawn(coro, name="memory:record-access")
+    except Exception as exc:  # noqa: BLE001 - best-effort accounting
+        coro.close()
+        logger.warning("search_memory: could not schedule fact access recording: %s", exc)
+
+
 @_handler("search_memory")
-async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+async def _search_memory(
+    args: dict[str, Any], ctx: ToolContext, *, record_access: bool = True
+) -> dict[str, Any]:
     """Search memory, applying identity scoping regardless of which path runs.
+
+    Facts returned count as used (``access_count``/``last_accessed``, the decay
+    and prune inputs) unless ``record_access`` is False — for a caller that
+    must have no side effects. The recording never delays or fails the search.
 
     Scoping is computed *above* the RIP 15 branch deliberately. It previously
     lived inside the fallback body, so enabling the router silently skipped it:
@@ -183,11 +224,7 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     # Log fact access for outcome attribution (best-effort).
     run_id = getattr(ctx, "run_id", None)
     if run_id:
-        fact_ids = [
-            r["id"]
-            for r in results
-            if r.get("source") in (None, "fact", "entity_expansion") and r.get("id")
-        ]
+        fact_ids = [r["id"] for r in results if r.get("source") in _FACT_SOURCES and r.get("id")]
         if fact_ids:
             await asyncio.to_thread(
                 log_fact_access,
@@ -196,6 +233,9 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 getattr(ctx, "agent_id", None),
                 ctx.tenant_id,
             )
+
+    if record_access:
+        _schedule_access_recording(results, ctx.tenant_id)
 
     formatted = _format_results(results, query_class)
 
@@ -504,7 +544,7 @@ async def _memory_block_list(args: dict[str, Any], ctx: ToolContext) -> dict[str
 async def _get_knowledge_gaps(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.gap_analysis import analyze_knowledge_gaps
 
-    return await analyze_knowledge_gaps()
+    return await analyze_knowledge_gaps(tenant_id=ctx.tenant_id)
 
 
 @_handler("record_procedure")
