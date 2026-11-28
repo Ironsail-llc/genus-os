@@ -192,6 +192,24 @@ def _admit(name: str, args: dict[str, Any], ctx: ToolContext, access: str) -> st
             gate_name="remote_tool_arguments",
             unlock="Call org_tools with `tenant` to list that company's tools.",
         )
+    inner = args.get("args")
+    if isinstance(inner, dict) and "dry_run" in inner and args.get("dry_run") is not True:
+        raise _refuse(
+            target,
+            "`dry_run` belongs at the top level of the call, beside `args`, not inside "
+            "`args`; nothing was sent.",
+            gate="policy",
+            gate_name="remote_tool_arguments",
+            unlock="Pass dry_run=true at the top level for a dry run, or drop it from args.",
+        )
+    if access == ACCESS_READ and "dry_run" in args:
+        raise _refuse(
+            target,
+            f"'{name}' has no dry run: a read changes nothing. Drop `dry_run`.",
+            gate="policy",
+            gate_name="remote_tool_arguments",
+            unlock="Call it again without dry_run.",
+        )
     if "args" in args and args["args"] is not None and not isinstance(args["args"], dict):
         raise _refuse(
             target,

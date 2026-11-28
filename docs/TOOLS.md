@@ -2000,7 +2000,9 @@ parent's engine, and engines never call each other directly.
   declared read tools and returns `outcome` and `result`. Read-only.
 - **`org_tool_write`** `{tenant, tool, args?, dry_run?}`: runs one of the
   child's declared write tools. `dry_run: true` returns `outcome: "dry_run"`
-  and `would` without changing anything.
+  and `would` without changing anything. `dry_run` goes at the top level:
+  inside `args` it is refused unless the child's tool declares its own
+  `dry_run`, and `org_tool_read` takes none.
 
 A child offers only the tools its plugins declare remote
 ([Plugins](PLUGINS.md)), each as a read or a write; a tool may also require an

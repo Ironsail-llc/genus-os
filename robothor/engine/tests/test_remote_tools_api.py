@@ -1119,7 +1119,7 @@ async def test_an_internal_failure_is_audited_and_keeps_a_writes_claim(world, mo
 
 
 async def test_dry_run_inside_a_writes_arguments_is_refused_not_run(world) -> None:
-    answer = await _call(**_risky(args={"dry_run": True}))
+    answer = await _call(**_write(tool="acme_risky", args={"dry_run": True}, attestations=[]))
 
     payload = _refusal(answer, 422, rc.ERR_BAD_ARGUMENTS)
     assert "top level" in payload["message"]
