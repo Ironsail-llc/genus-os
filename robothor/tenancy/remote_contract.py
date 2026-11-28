@@ -55,6 +55,31 @@ ERROR_CODES: frozenset[str] = frozenset(
     }
 )
 
+#: The refusals a target (or the bridge) gives BEFORE anything runs, by the
+#: HTTP status each comes with. For a write, any other answer -- a 5xx, an
+#: unreadable body, an unexpected status, code or shape -- may follow a write
+#: that acted, so it is an unknown outcome, never a plain error.
+CLEAN_REFUSALS: dict[int, frozenset[str]] = {
+    403: frozenset(
+        {ERR_WRITE_FORBIDDEN, ERR_NOT_PERMITTED, ERR_CALLER_FORBIDDEN, ERR_ATTESTATION_MISSING}
+    ),
+    404: frozenset({ERR_TOOL_UNKNOWN, ERR_NOT_PERMITTED}),
+    409: frozenset({ERR_ACCESS_MISMATCH, ERR_REQUEST_MISMATCH}),
+    422: frozenset({ERR_BAD_ARGUMENTS}),
+}
+
+
+def is_clean_refusal(status: int, body: Any) -> bool:
+    """Whether ``(status, body)`` is a refusal given before anything ran."""
+    code = body.get("error") if isinstance(body, dict) else None
+    return isinstance(code, str) and code in CLEAN_REFUSALS.get(status, frozenset())
+
+
+def is_known_answer(body: Any) -> bool:
+    """Whether a 200 body is one of the answers the target gives."""
+    return isinstance(body, dict) and body.get("outcome") in OUTCOMES
+
+
 # ── Names ────────────────────────────────────────────────────────────────────
 
 #: Audit event written under the TARGET tenant for every remote call.

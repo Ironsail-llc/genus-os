@@ -47,6 +47,8 @@ from robothor.tenancy.remote_contract import (
     OUTCOME_ERROR,
     OUTCOME_REPLAYED,
     SCOPE_ORG_REMOTE,
+    is_clean_refusal,
+    is_known_answer,
 )
 
 if TYPE_CHECKING:
@@ -307,6 +309,14 @@ async def _send(
 
 def _failure(status: int, answer: Any, *, write: bool) -> tuple[dict[str, Any], str]:
     """A non-200 (or no) answer as a tool result, and the audit outcome for it."""
+    if status == -1:
+        return {
+            "error": "The company's engine gave an answer this engine cannot read. That "
+            "company's system may or may not have changed: check there before trying again.",
+            "error_code": ERR_OUTCOME_UNKNOWN,
+            "outcome_unknown": True,
+            "retryable": False,
+        }, "unknown"
     if status == 0:
         exc = answer
         sent_nothing = isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout)
@@ -320,6 +330,7 @@ def _failure(status: int, answer: Any, *, write: bool) -> tuple[dict[str, Any], 
         }
         if write and not sent_nothing:
             result["outcome_unknown"] = True
+            return result, "unknown"
         return result, "error"
     body = answer if isinstance(answer, dict) else {}
     if "message" not in body and status in (401, 403):
@@ -343,10 +354,20 @@ def _failure(status: int, answer: Any, *, write: bool) -> tuple[dict[str, Any], 
     }
     if body.get("attestation"):
         result["attestation"] = body["attestation"]
-    if write and (code in _UNKNOWN_CODES or status in (502, 504)):
+    clean = is_clean_refusal(status, body)
+    if write and not clean:
+        # Anything but a refusal given before the call ran -- a 5xx, an
+        # unreadable body, an unexpected status or code -- may follow a write
+        # that acted.
+        result["error"] = (
+            f"{result['error']} That company's system may or may not have changed: "
+            "check there before trying again."
+        )
+        result["error_code"] = ERR_OUTCOME_UNKNOWN
         result["outcome_unknown"] = True
         result["retryable"] = False
-    refused = status in (403, 404, 409, 413, 422) and code not in _UNKNOWN_CODES
+        return result, "unknown"
+    refused = clean or (status in (403, 404, 409, 413, 422) and code not in _UNKNOWN_CODES)
     return result, "denied" if refused else "error"
 
 
@@ -380,6 +401,8 @@ async def _call(name: str, args: dict[str, Any], ctx: ToolContext, access: str) 
         "agent_id": ctx.agent_id,
     }
     status, answer = await _send("POST", _CALL_PATH, ctx, body=body)
+    if status == 200 and access == ACCESS_WRITE and not is_known_answer(answer):
+        status = -1  # a 200 the target never gives: read as an unexpected answer
     if status != 200 or not isinstance(answer, dict):
         result, outcome = _failure(status, answer, write=access == ACCESS_WRITE)
         _audit(name, ctx, target, outcome, remote, dry_run=dry_run, reason=_reason(result))
