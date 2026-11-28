@@ -405,7 +405,15 @@ async def _call(name: str, args: dict[str, Any], ctx: ToolContext, access: str) 
         status = -1  # a 200 the target never gives: read as an unexpected answer
     if status != 200 or not isinstance(answer, dict):
         result, outcome = _failure(status, answer, write=access == ACCESS_WRITE)
-        _audit(name, ctx, target, outcome, remote, dry_run=dry_run, reason=_reason(result))
+        _audit(
+            name,
+            ctx,
+            target,
+            outcome,
+            remote,
+            dry_run=dry_run,
+            reason=_reason(result, status=status, outcome=outcome),
+        )
         return {"tenant": target, "tool": args["tool"], **result}
 
     outcome = str(answer.get("outcome") or "")
@@ -456,14 +464,31 @@ async def _call(name: str, args: dict[str, Any], ctx: ToolContext, access: str) 
         audit_outcome,
         remote,
         dry_run=outcome == OUTCOME_DRY_RUN,
-        reason=str(result.get("error") or ""),
+        reason=(
+            f"{ERR_OUTCOME_UNKNOWN}: the write's outcome is unknown"
+            if unknown
+            else _TOOL_ERROR_REASON
+            if outcome == OUTCOME_ERROR
+            else ""
+        ),
     )
     return result
 
 
-def _reason(result: dict[str, Any]) -> str:
+#: What the home audit row says for an answer whose text is the child's own:
+#: a tool's reported error, or an answer that is not one of the engine's
+#: refusals. That text can name a person; the row keeps only the code.
+_TOOL_ERROR_REASON = "the child's tool reported an error"
+_UNREADABLE_REASON = "the call did not return a refusal this engine knows"
+
+
+def _reason(result: dict[str, Any], *, status: int = 0, outcome: str = "") -> str:
+    """The audit reason: the engine's own sentence for a refusal (or for a
+    bridge that could not be reached), else only the code and a fixed sentence."""
     code = result.get("error_code")
-    return f"{code}: {result['error']}" if code else str(result["error"])
+    if outcome == "denied" or status == 0:
+        return f"{code}: {result['error']}" if code else str(result["error"])
+    return f"{code or f'HTTP {status}'}: {_UNREADABLE_REASON}"
 
 
 async def _org_tool_read(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -483,7 +508,14 @@ async def _catalogue_of(
         _audit(CATALOGUE_TOOL, ctx, target, "ok", remote)
         return {"tenant_id": target, "status": "ok", **answer}
     result, outcome = _failure(status, answer, write=False)
-    _audit(CATALOGUE_TOOL, ctx, target, outcome, remote, reason=_reason(result))
+    _audit(
+        CATALOGUE_TOOL,
+        ctx,
+        target,
+        outcome,
+        remote,
+        reason=_reason(result, status=status, outcome=outcome),
+    )
     return {"tenant_id": target, "status": "error", **result}
 
 

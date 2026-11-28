@@ -506,17 +506,15 @@ def _refused_before_running(result: dict[str, Any]) -> bool:
 def _outcome_unknown(result: dict[str, Any]) -> bool:
     """A write's result that cannot say whether the remote system changed.
 
-    The tool's own signal (``outcome_unknown``, as the effect ledger reads it),
-    a crash the dispatcher caught (``tool_crashed``), or any other error that
-    is not a control's refusal: a write that failed may have acted first.
+    The signals the effect ledger already reads: the tool's own
+    ``outcome_unknown`` (which the dispatcher also sets for a write whose
+    transport failed, ``response_failure``) and ``tool_crashed`` (the tool
+    raised). A plain error the tool RETURNED is a completed call: stored,
+    replayed, never fenced. (A timeout never gets here: it keeps the claim.)
     """
     if _refused_before_running(result):
         return False
-    return (
-        result.get("outcome_unknown") is True
-        or result.get("tool_crashed") is True
-        or "error" in result
-    )
+    return result.get("outcome_unknown") is True or result.get("tool_crashed") is True
 
 
 async def execute(tenant_id: str, body: Any) -> tuple[int, dict[str, Any]]:

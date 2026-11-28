@@ -119,7 +119,28 @@ def spec(tool_name: str) -> EffectSpec | None:
     return plugin_specs().get(tool_name)
 
 
+#: Built-in writes whose target is derived by core, not declared by a plugin.
+#: ``org_tool_write`` acts on one tool in one child company with one set of
+#: arguments; the arguments are kept as a digest only (they may name anyone).
+_CORE_TARGET_KEYS: dict[str, tuple[str, ...]] = {
+    "org_tool_write": ("tenant", "tool", "args_digest"),
+}
+
+
+def _core_target(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    from robothor.tenancy.remote_contract import args_digest
+
+    inner = arguments.get("args")
+    return {
+        "tenant": arguments.get("tenant"),
+        "tool": arguments.get("tool"),
+        "args_digest": args_digest(inner if isinstance(inner, dict) else {}),
+    }
+
+
 def declared_target(tool_name: str) -> tuple[str, ...] | None:
+    if tool_name in _CORE_TARGET_KEYS:
+        return _CORE_TARGET_KEYS[tool_name]
     declared = spec(tool_name)
     return declared.target if declared is not None and declared.target else None
 
@@ -133,6 +154,8 @@ def target_of(tool_name: str, arguments: Any) -> dict[str, Any]:
     """
     if not isinstance(arguments, dict):
         return {}
+    if tool_name in _CORE_TARGET_KEYS:
+        return _core_target(tool_name, arguments)
     keys = declared_target(tool_name)
     if keys:
         return {key: arguments.get(key) for key in keys}
@@ -176,6 +199,8 @@ def short(value: Any) -> Any:
 def fences_whole_tool(tool_name: str) -> bool:
     """Whether every later call of the tool waits on an uncertain one: unless it
     declares a target and has not asked for the whole-tool scope."""
+    if tool_name in _CORE_TARGET_KEYS:
+        return False
     declared = spec(tool_name)
     return declared is None or not declared.target or declared.fence == "tool"
 

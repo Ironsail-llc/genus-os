@@ -487,12 +487,24 @@ for a write; or, with no person, the parent's child-data grant and the
 the tool's own schema. A write needs a request id and runs at most once for
 it; a second call with that id but another tool or other arguments is
 refused. A write whose result is over 256 kB is still reported as done, with
-the result withheld, so keep a write's result small. A write that returns an
-error is treated as having an unknown outcome (the parent is told the system
-may or may not have changed, and the request id is never run again) unless
-the result is a refusal from `robothor.engine.refusal.refusal(...)`
-(`refused: true`), which says nothing ran: return that shape from your own
-kill switch or precondition check, so a retry can run once it clears. The call then goes through the normal dispatch in the child tenant, so
+the result withheld, so keep a write's result small.
+
+How a write tool reports a failure decides what the parent is told:
+
+- **It may have acted** (the request was sent and the answer lost, a timeout
+  after sending): return the error with `"outcome_unknown": true`. The parent
+  is told the system may or may not have changed, the request id is never run
+  again, and the parent's identical call is fenced until reconciled. The engine
+  sets this itself when the tool raises (`tool_crashed`), when an `httpx`
+  transport error escapes a write tool, and when the call runs out of time.
+- **It did not act** because a control stopped it (your kill switch, a
+  precondition): return `robothor.engine.refusal.refusal(...)` (`refused:
+  true`). The request id is released, so a retry runs once the control clears.
+- **It completed and the system said no** (`{"error": "slot already taken"}`):
+  return a plain error. That is a finished call: stored, replayed for the same
+  request id, never fenced.
+
+The call then goes through the normal dispatch in the child tenant, so
 the role's permission rows, kill switches and your own audit apply as they do
 for any call. `parent_agent` is denied everything until the child grants it a
 tool ([Service roles](runbooks/SERVICE_ROLES.md#roles-available)). Your tool
