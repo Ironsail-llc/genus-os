@@ -906,6 +906,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="With --extraction: compare against this recorded baseline; exit 2 on a regression",
     )
     memeval_parser.add_argument(
+        "--from-report",
+        action="append",
+        default=None,
+        help="With --extraction --record-baseline: record from this saved run report (repeatable)",
+    )
+    memeval_parser.add_argument(
         "--extraction-model",
         default=None,
         help="With --extraction: the local model that extracts (default: the generation model)",

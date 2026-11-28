@@ -87,6 +87,9 @@ MATCH_QUESTION = (
     "says the same thing about them; the same claim about a different person is wrong."
 )
 
+#: The split a conversation belongs to unless it says otherwise.
+DEFAULT_SPLIT = "dev"
+
 #: At most this many planted matches per kind.
 PLANTED_PER_KIND = 200
 
@@ -855,6 +858,8 @@ async def _run_extraction_eval(
         "fixtures": str(path),
         "model": _model_label(model),
         "judge_model": judge_name if llm is None else "injected",
+        # Every conversation of this file is a dev conversation.
+        "split": DEFAULT_SPLIT,
         "conversations": len(conversations),
         "repeats": max(1, repeats),
         "metrics": metrics,
@@ -1026,6 +1031,82 @@ BASELINE_HEADER = """\
 """
 
 
+def _saved_scores(
+    data: dict[str, Any], conversations: dict[str, Conversation], offset: int
+) -> list[ConversationScore]:
+    out = []
+    for s in data["scores"]:
+        conv = conversations.get(s["id"])
+        if conv is None:
+            raise ValueError(f"saved report scores {s['id']!r}, which the fixtures do not have")
+        by_turn = {t.ref: t for t in conv.turns}
+        extracted = []
+        for x in s["extracted"]:
+            got = ExtractedOutcome(**{k: v for k, v in x.items() if k != "guest_as_user"})
+            cited = [by_turn[r] for r in got.turns if r in by_turn]
+            # Recomputed from the fixtures: a report saved before this metric
+            # existed carries no value for it.
+            got.guest_as_user = (
+                bool(cited)
+                and all(turn_speaker(t) not in ("user", "assistant") for t in cited)
+                and _contains(normalise(got.text), "the user")
+            )
+            extracted.append(got)
+        out.append(
+            ConversationScore(
+                s["id"],
+                s["category"],
+                offset + int(s["repeat"]),
+                s["error"],
+                [ExpectedOutcome(**e) for e in s["expected"]],
+                extracted,
+                int(s.get("judge_errors") or 0),
+            )
+        )
+    return out
+
+
+def report_from_saved(paths: Sequence[str | Path], fixtures: str | Path) -> dict[str, Any]:
+    """One report pooled from saved run reports (their ``scores``), so a
+    baseline can be recorded without running the model again. Every report
+    must be the same model and split; their repeats are numbered on in order.
+    The verdicts are the saved ones: the judge as it was on those runs."""
+    import json
+
+    conversations = {c.id: c for c in load_fixtures(fixtures)}
+    scores: list[ConversationScore] = []
+    first: dict[str, Any] | None = None
+    for path in paths:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if first is None:
+            first = data
+        for key in ("model", "split"):
+            if data.get(key, DEFAULT_SPLIT if key == "split" else None) != first.get(
+                key, DEFAULT_SPLIT if key == "split" else None
+            ):
+                raise ValueError(f"{path}: {key} differs from {paths[0]}: they cannot be pooled")
+        offset = 1 + max((s.repeat for s in scores), default=-1)
+        scores += _saved_scores(data, conversations, offset)
+    if first is None:
+        raise ValueError("no saved reports given")
+    repeats = sorted({s.repeat for s in scores})
+    metrics = _metrics(scores)
+    return {
+        "suite_id": first.get("suite_id", SUITE_ID),
+        "model": first["model"],
+        "judge_model": first.get("judge_model"),
+        "split": first.get("split", DEFAULT_SPLIT),
+        "repeats": len(repeats),
+        "metrics": metrics,
+        "comparable": comparable_metrics(metrics, repeats=len(repeats)),
+        "per_repeat": [
+            comparable_metrics(_metrics([s for s in scores if s.repeat == r]), repeats=1)
+            for r in repeats
+        ],
+        "from_reports": [str(p) for p in paths],
+    }
+
+
 def write_baseline(path: str | Path, report: dict[str, Any]) -> dict[str, Any]:
     """Record ``report`` as the baseline at ``path``, keeping its thresholds."""
     import yaml
@@ -1110,8 +1191,8 @@ def format_extraction_markdown(report: dict[str, Any]) -> str:
         lines += ["", "| Run | Recall | Precision | Trust | Date |", "|---|---|---|---|---|"]
         for i, r in enumerate(report["per_repeat"], start=1):
             lines.append(
-                f"| {i} | {_pct(r['recall'])} | {_pct(r['precision'])} | "
-                f"{_pct(r['trust_accuracy'])} | {_pct(r['date_accuracy'])} |"
+                f"| {i} | {_pct(r.get('recall'))} | {_pct(r.get('precision'))} | "
+                f"{_pct(r.get('trust_accuracy'))} | {_pct(r.get('date_accuracy'))} |"
             )
     cmp = report.get("baseline_comparison")
     if cmp:

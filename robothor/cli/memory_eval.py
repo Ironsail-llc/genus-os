@@ -27,6 +27,7 @@ from robothor.memory.eval_extraction import (
     compare_to_baseline,
     format_extraction_markdown,
     load_baseline,
+    report_from_saved,
     run_extraction_eval,
     write_baseline,
 )
@@ -241,8 +242,12 @@ def _cmd_answers(args: argparse.Namespace) -> int:
     return 0
 
 
-def _write_report(report: dict[str, Any], markdown: str, report_path: str | None) -> None:
-    """The JSON report and its Markdown summary to ``report_path``, or stdout."""
+def _write_report(
+    report: dict[str, Any], markdown: str, report_path: str | None, *, quiet: bool = False
+) -> None:
+    """The JSON report and its Markdown summary to ``report_path``, or stdout.
+    ``quiet`` saves the files and prints nothing (a save before anything else
+    can fail)."""
     import json
 
     payload = json.dumps(report, indent=2, default=str)
@@ -251,6 +256,8 @@ def _write_report(report: dict[str, Any], markdown: str, report_path: str | None
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(payload + "\n", encoding="utf-8")
         path.with_suffix(".md").write_text(markdown, encoding="utf-8")
+        if quiet:
+            return
         print(markdown)
         print(f"report: {path} (summary: {path.with_suffix('.md')})")
     else:
@@ -269,13 +276,30 @@ def _cmd_extraction(args: argparse.Namespace) -> int:
     another model or split). With ``--baseline`` the run is compared against
     that recorded baseline and exits 2 when a metric regressed beyond its
     tolerance; its PROPOSED thresholds are reported and never change the exit
-    code. ``--record-baseline`` writes this run as the baseline instead. Never
-    recorded to benchmark_results.
+    code. ``--record-baseline`` writes this run as the baseline instead, or,
+    with ``--from-report``, the saved run reports given, without running the
+    model. The run's report is saved before any comparison or recording, so a
+    baseline that cannot be read, compared or written never loses the run: it
+    exits 3 with the reason. Never recorded to benchmark_results.
     """
     fixtures = Path(args.fixtures)
     if not fixtures.exists():
         print(f"Fixtures not found: {fixtures}")
         return 3
+    baseline_path = getattr(args, "baseline", None)
+    target = baseline_path or str(fixtures.with_name(BASELINE_NAME))
+    saved = getattr(args, "from_report", None) or []
+    if saved:
+        if not getattr(args, "record_baseline", False):
+            print("memory-eval cannot run: --from-report is for --record-baseline")
+            return 3
+        try:
+            write_baseline(target, report_from_saved(saved, fixtures))
+        except (OSError, ValueError, KeyError) as e:
+            print(f"memory-eval cannot record the baseline: {e}")
+            return 3
+        print(f"recorded baseline: {target} (from {len(saved)} saved report(s))")
+        return 0
     try:
         report = asyncio.run(
             run_extraction_eval(
@@ -289,10 +313,16 @@ def _cmd_extraction(args: argparse.Namespace) -> int:
     except (EvalPreconditionError, ValueError) as e:
         print(f"memory-eval cannot run: {e}")
         return 3
-    baseline_path = getattr(args, "baseline", None)
+    if args.report:  # saved first: nothing below may lose the run
+        _write_report(report, format_extraction_markdown(report), args.report, quiet=True)
     if getattr(args, "record_baseline", False):
-        target = baseline_path or str(Path(args.fixtures).with_name(BASELINE_NAME))
-        write_baseline(target, report)
+        try:
+            write_baseline(target, report)
+        except (OSError, ValueError, KeyError) as e:
+            if not args.report:
+                _write_report(report, format_extraction_markdown(report), None)
+            print(f"memory-eval cannot record the baseline at {target}: {e}")
+            return 3
         _write_report(report, format_extraction_markdown(report), args.report)
         print(f"recorded baseline: {target}")
         return 0
@@ -301,8 +331,10 @@ def _cmd_extraction(args: argparse.Namespace) -> int:
             report["baseline_comparison"] = compare_to_baseline(
                 report, load_baseline(baseline_path)
             )
-        except (EvalPreconditionError, ValueError) as e:
-            print(f"memory-eval cannot compare: {e}")
+        except (EvalPreconditionError, ValueError, KeyError) as e:
+            if not args.report:
+                _write_report(report, format_extraction_markdown(report), None)
+            print(f"memory-eval cannot compare against {baseline_path}: {e}")
             return 3
     _write_report(report, format_extraction_markdown(report), args.report)
     if report.get("baseline_comparison", {}).get("regressed"):
