@@ -98,3 +98,29 @@ def test_every_home_outcome_is_written(real_audit) -> None:
     with real_audit.cursor() as cur:
         cur.execute("SELECT status FROM audit_log WHERE event_type = %s", (CROSS_TENANT_EVENT,))
         assert sorted(r[0] for r in cur.fetchall()) == sorted(outcomes)
+
+
+@pytest.mark.integration
+def test_a_held_crossing_is_written(real_audit) -> None:
+    from robothor.engine.tools.cross_tenant import CROSS_TENANT_EVENT, audit_cross_tenant
+    from robothor.tenancy.remote_contract import OUTCOME_HELD_UNCERTAIN
+
+    audit_cross_tenant(
+        home_tenant="test-tenant",
+        target_tenant="t" * 128,
+        user_id="",
+        agent_id="a" * 64,
+        tool="org_tool_write",
+        outcome="denied",
+        remote_tool="example_write",
+        code=OUTCOME_HELD_UNCERTAIN,
+        held={"effect_id": "e-1", "digest": "d" * 64},
+    )
+
+    with real_audit.cursor() as cur:
+        cur.execute(
+            "SELECT status, details->>'outcome', details->'held'->>'digest' FROM audit_log "
+            "WHERE event_type = %s",
+            (CROSS_TENANT_EVENT,),
+        )
+        assert cur.fetchall() == [("denied", OUTCOME_HELD_UNCERTAIN, "d" * 64)]
