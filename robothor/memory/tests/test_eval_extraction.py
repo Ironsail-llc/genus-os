@@ -548,3 +548,17 @@ def test_every_shipped_fact_is_reachable_by_its_own_paraphrase_keys() -> None:
     for conv in ex.load_fixtures(SHIPPED):
         for fact in conv.facts:
             assert ex.rule_match(fact, fact.paraphrase) is None, fact.id
+
+
+@pytest.mark.asyncio
+async def test_the_model_judge_is_told_a_claim_about_someone_else_is_wrong(fixtures) -> None:
+    """The local judge accepted "The user is allergic to peanuts" for "Bob is
+    allergic to peanuts" until the question said who the fact must be about."""
+    questions: list[str] = []
+
+    async def llm(case: Any, ans: Any) -> tuple[bool, str]:
+        questions.append(case.question)
+        return False, "llm: no"
+
+    await ex.make_fact_judge(llm)(fixtures[0].facts[0], "The user drinks dark roast daily.")
+    assert "same person" in questions[0] and "different person" in questions[0]
