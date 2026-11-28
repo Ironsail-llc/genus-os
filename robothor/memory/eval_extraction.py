@@ -75,8 +75,14 @@ TRUST_LABELS = ("user_stated", "agent_generated", "external")
 #: The extraction's speaker role -> the origin the write path stores.
 TRUST_OF_ROLE = {"user": "user_stated", "assistant": "agent_generated", "external": "external"}
 
-#: The question the LLM judge is shown for every pair (its prompt is fixed).
-MATCH_QUESTION = "What fact does the conversation record?"
+#: The question the LLM judge is shown for every pair (its prompt is fixed). It
+#: names the subject: without that the local judge matched "The user is allergic
+#: to peanuts" to "Bob is allergic to peanuts" and failed validation on decoys.
+MATCH_QUESTION = (
+    "What fact does the conversation record? The answer is correct only if it is about "
+    "the same person (the user, the assistant, or the named person) as the reference and "
+    "says the same thing about them; the same claim about a different person is wrong."
+)
 
 #: At most this many planted matches per kind.
 PLANTED_PER_KIND = 200
