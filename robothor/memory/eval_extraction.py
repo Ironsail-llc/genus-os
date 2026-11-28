@@ -161,10 +161,12 @@ def _fact(raw: dict[str, Any], where: str, n_turns: int, speakers: set[str]) -> 
         raise ValueError(f"{where}: keys must name at least one term")
     raw_trust = raw.get("trust")
     trusts = tuple(raw_trust) if isinstance(raw_trust, list) else (raw_trust,)
-    if not all(t in TRUST_LABELS for t in trusts):
+    if not trusts or not all(t in TRUST_LABELS for t in trusts):
         raise ValueError(f"{where}: trust {raw_trust!r} is not one of {TRUST_LABELS}")
     raw_speaker = raw.get("speaker")
     who = tuple(str(w) for w in (raw_speaker if isinstance(raw_speaker, list) else [raw_speaker]))
+    if not who:
+        raise ValueError(f"{where}: speaker must name at least one speaker")
     for w in who:
         if w not in speakers:
             raise ValueError(f"{where}: speaker {w!r} says none of this conversation's turns")
@@ -206,21 +208,38 @@ def turn_speaker(turn: ConversationTurn) -> str:
     return "user"
 
 
-def _conversation(raw: dict[str, Any]) -> Conversation:
+def _time(value: Any, where: str) -> datetime:
+    try:
+        at = datetime.fromisoformat(str(value))
+    except ValueError as exc:
+        raise ValueError(f"{where}: at {value!r} is not an ISO date-time") from exc
+    if at.tzinfo is None:
+        raise ValueError(f"{where}: at must carry a UTC offset")
+    return at
+
+
+def _conversation(raw: Any, n: int) -> Conversation:
+    if not isinstance(raw, dict):
+        raise ValueError(f"conversation {n} is not a mapping: {raw!r}")
     cid = str(raw.get("id") or "")
     if not cid:
-        raise ValueError("a conversation has no id")
+        raise ValueError(f"conversation {n} has no id")
     category = raw.get("category")
     if category not in CATEGORIES:
         raise ValueError(f"{cid}: category {category!r} is not one of {CATEGORIES}")
-    start = datetime.fromisoformat(str(raw["at"]))
-    if start.tzinfo is None:
-        raise ValueError(f"{cid}: at must carry a UTC offset")
+    if "at" not in raw:
+        raise ValueError(f"{cid}: at (when the conversation starts) is required")
+    start = _time(raw["at"], cid)
+    raw_turns = raw.get("turns") or []
+    if not isinstance(raw_turns, list):
+        raise ValueError(f"{cid}: turns must be a list")
     turns: list[ConversationTurn] = []
-    for n, t in enumerate(raw.get("turns") or [], start=1):
+    for n, t in enumerate(raw_turns, start=1):
+        if not isinstance(t, dict):
+            raise ValueError(f"{cid} turn {n}: not a mapping: {t!r}")
         if t.get("role") not in ("user", "assistant") or not str(t.get("text") or "").strip():
             raise ValueError(f"{cid} turn {n}: role user/assistant and text are required")
-        at = datetime.fromisoformat(str(t["at"])) if t.get("at") else start + timedelta(minutes=n)
+        at = _time(t["at"], f"{cid} turn {n}") if t.get("at") else start + timedelta(minutes=n)
         owner = t.get("owner", True) is not False
         turns.append(
             ConversationTurn(
@@ -235,11 +254,18 @@ def _conversation(raw: dict[str, Any]) -> Conversation:
     if not turns:
         raise ValueError(f"{cid}: no turns")
     speakers = {turn_speaker(t) for t in turns}
+    raw_facts = raw.get("facts") or []
+    if not isinstance(raw_facts, list) or not all(isinstance(f, dict) for f in raw_facts):
+        raise ValueError(f"{cid}: facts must be a list of mappings")
     facts = tuple(
-        _fact(f, f"{cid}#{i}", len(turns), speakers)
-        for i, f in enumerate(raw.get("facts") or [], start=1)
+        _fact(f, f"{cid}#{i}", len(turns), speakers) for i, f in enumerate(raw_facts, start=1)
     )
-    third = tuple(int(n) for n in raw.get("third_party_turns") or [])
+    raw_third = raw.get("third_party_turns") or []
+    if not isinstance(raw_third, list) or not all(
+        isinstance(t, int) and not isinstance(t, bool) and 1 <= t <= len(turns) for t in raw_third
+    ):
+        raise ValueError(f"{cid}: third_party_turns must be turn numbers 1..{len(turns)}")
+    third = tuple(raw_third)
     return Conversation(cid, category, tuple(turns), facts, third)
 
 
@@ -247,10 +273,18 @@ def load_fixtures(path: str | Path) -> list[Conversation]:
     """The labelled conversations. Raises ``ValueError`` naming the bad label."""
     import yaml
 
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    try:
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{path}: not valid YAML: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: must be a mapping with version and conversations")
     if data.get("version") != 1:
         raise ValueError(f"{path}: version must be 1")
-    out = [_conversation(c) for c in data.get("conversations") or []]
+    raw = data.get("conversations") or []
+    if not isinstance(raw, list):
+        raise ValueError(f"{path}: conversations must be a list")
+    out = [_conversation(c, n) for n, c in enumerate(raw, start=1)]
     seen: set[str] = set()
     for conv in out:
         if conv.id in seen:
